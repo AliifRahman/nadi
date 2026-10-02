@@ -1,8 +1,8 @@
-"""Uji NADI pada peserta yang tidak ikut dilatih.
+"""Evaluate NADI on held-out patients.
 
-Data sampel tidak punya label fraud, jadi klaim uji dimodifikasi dengan pola yang
-diketahui (anomali sisipan) lalu diukur berapa yang tertangkap.
-Hasil: ringkasan di layar dan artifacts/scored.parquet untuk aplikasi.
+The sample data has no fraud labels, so known patterns are injected into test
+claims and we measure how many of them the model ranks at the top.
+Output: a summary on stdout and artifacts/scored.parquet for the app.
 """
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ rng = np.random.default_rng(0)
 
 
 def surprise(model, vocab, feats: pd.DataFrame, patient: np.ndarray) -> pd.DataFrame:
-    """Kejutan model per klaim per field."""
+    """Model surprisal per claim, per field."""
     X, chunk, pos = nadi.to_sequences(nadi.encode(feats, vocab), patient)
     return pd.DataFrame(nadi.surprise(model, X)[chunk, pos], columns=nadi.FIELDS)
 
@@ -26,8 +26,8 @@ def report(name: str, score: np.ndarray, injected: np.ndarray) -> None:
     n1, n0 = injected.sum(), (~injected).sum()
     auc = (rank[injected].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)
     top = np.argsort(-score)[: len(score) // 20]
-    print(f"  {name:<32} AUC {auc:.3f} | 5% teratas: {injected[top].mean():.0%} sisipan, "
-          f"menangkap {injected[top].sum() / n1:.0%}")
+    print(f"  {name:<32} AUC {auc:.3f} | top 5%: precision {injected[top].mean():.0%}, "
+          f"recall {injected[top].sum() / n1:.0%}")
 
 
 def n_secondary(feats: pd.DataFrame) -> pd.Series:
@@ -35,7 +35,7 @@ def n_secondary(feats: pd.DataFrame) -> pd.Series:
 
 
 def severity_table(feats: pd.DataFrame) -> pd.DataFrame:
-    """Pembanding sederhana: P(keparahan | CBG, jumlah dx sekunder) dari klaim latih."""
+    """Simple baseline: P(severity | CBG, number of secondary dx) from train claims."""
     counts = feats.groupby([feats.cbg, n_secondary(feats), feats.sev]).size().unstack(fill_value=0) + 0.5
     return counts.div(counts.sum(axis=1), axis=0)
 
@@ -51,7 +51,7 @@ def table_surprise(table: pd.DataFrame, feats: pd.DataFrame) -> np.ndarray:
 
 
 def add_complication(feats: pd.DataFrame, rows: np.ndarray, pool: dict) -> pd.DataFrame:
-    """Upcoding realistis: tambah satu dx sekunder yang lazim di keparahan tinggi, naikkan I -> II."""
+    """Realistic upcoding: add one secondary dx that is common at higher severity, raise I -> II."""
     out = feats.copy()
     for row in rows:
         codes = {c for c in out.loc[row, SEC] if c != "-"} | {str(rng.choice(pool[out.at[row, "cbg"]]))}
@@ -61,7 +61,7 @@ def add_complication(feats: pd.DataFrame, rows: np.ndarray, pool: dict) -> pd.Da
 
 
 def split_episodes(df: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
-    """Pecah satu rawat inap menjadi dua klaim berurutan di RS yang sama."""
+    """Split one inpatient stay into two back-to-back claims at the same hospital."""
     first = df.loc[rows].assign(injected=False)
     second = first.assign(injected=True)
     first["los"] = first.los // 2
@@ -73,7 +73,7 @@ def split_episodes(df: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
 
 
 def save_scored(df, train, inpatient, nll, p_sev) -> None:
-    """Klaim uji asli beserta skor, untuk antrean dan simulator di aplikasi."""
+    """Original test claims with their scores, for the queue and simulator in the app."""
     claimed = df.severity.map({"0": 0, "I": 1, "II": 2, "III": 3}).to_numpy()
     expected = 1 + p_sev.argmax(axis=1)
     typical = train.groupby(["cbg", "hosp_class", "severity"]).cost.agg(["median", "size"])
@@ -85,13 +85,13 @@ def save_scored(df, train, inpatient, nll, p_sev) -> None:
     scored[["p_I", "p_II", "p_III"]] = p_sev
     scored["p_claimed"] = np.exp(-nll.sev.to_numpy())
     scored["expected"] = LEVELS[expected - 1]
-    # selisih ke tarif lazim bila keparahan mengikuti perkiraan model; kasar, hanya untuk prioritas
+    # gap to the typical tariff at the expected severity; rough, only used for ranking
     scored["potential"] = np.where(inpatient & (claimed > expected), saving, 0).astype("int64")
     scored.to_parquet("artifacts/scored.parquet", index=False)
 
     above = scored[scored.potential > 0]
-    print(f"\ntersimpan artifacts/scored.parquet | rawat inap di atas perkiraan model: {len(above):,} klaim, "
-          f"potensi selisih Rp{above.potential.sum() / 1e9:.2f} miliar (kasar)")
+    print(f"\nsaved artifacts/scored.parquet | inpatient claims above expected severity: {len(above):,}, "
+          f"potential gap Rp{above.potential.sum() / 1e9:.2f}B (rough)")
 
 
 def main() -> None:
@@ -112,9 +112,9 @@ def main() -> None:
 
     truth = feats.sev[inpatient].to_numpy()
     table_guess = table.columns[np.nan_to_num(table_probs(table, feats[inpatient])).argmax(axis=1)]
-    print(f"klaim uji {len(df):,} (rawat inap {inpatient.sum():,}) dari {df.patient.nunique():,} peserta")
-    print(f"tebak keparahan rawat inap: NADI {np.mean(LEVELS[p_sev[inpatient].argmax(axis=1)] == truth):.1%} | "
-          f"tabel CBG x jumlah dx {np.mean(table_guess == truth):.1%} | selalu 'I' {np.mean(truth == 'I'):.1%}")
+    print(f"test claims {len(df):,} (inpatient {inpatient.sum():,}) from {df.patient.nunique():,} patients")
+    print(f"inpatient severity accuracy: NADI {np.mean(LEVELS[p_sev[inpatient].argmax(axis=1)] == truth):.1%} | "
+          f"baseline table {np.mean(table_guess == truth):.1%} | always 'I' {np.mean(truth == 'I'):.1%}")
 
     def pick(mask: np.ndarray) -> np.ndarray:
         rows = np.flatnonzero(mask)
@@ -124,34 +124,34 @@ def main() -> None:
         new = surprise(model, vocab, changed, patient)
         label = np.zeros(len(changed), dtype=bool)
         label[rows] = True
-        report("NADI, kejutan keparahan", new.sev.to_numpy()[inpatient], label[inpatient])
+        report("NADI, severity surprisal", new.sev.to_numpy()[inpatient], label[inpatient])
         if with_sec:
-            report("NADI, dx sekunder + keparahan", new[SEC + ["sev"]].sum(axis=1).to_numpy()[inpatient], label[inpatient])
-        report("tabel CBG x jumlah dx", table_surprise(table, changed[inpatient]), label[inpatient])
+            report("NADI, secondary dx + severity", new[SEC + ["sev"]].sum(axis=1).to_numpy()[inpatient], label[inpatient])
+        report("baseline table", table_surprise(table, changed[inpatient]), label[inpatient])
 
     low = inpatient & (feats.sev == "I").to_numpy()
 
-    print("\n[1] keparahan dinaikkan I -> II tanpa perubahan lain")
+    print("\n[1] severity raised I -> II, nothing else changed")
     rows = pick(low)
     changed = feats.copy()
     changed.loc[rows, "sev"] = "II"
     injected_report(changed, rows, with_sec=False)
 
-    print("\n[2] upcoding realistis: tambah 1 dx sekunder + keparahan I -> II")
+    print("\n[2] realistic upcoding: +1 secondary dx and severity I -> II")
     severe = train_ri[train_ri.sev != "I"]
     pool = {cbg: g[SEC].to_numpy().ravel() for cbg, g in severe.groupby("cbg")}
     pool = {cbg: codes[codes != "-"] for cbg, codes in pool.items() if (codes != "-").any()}
     rows = pick(low & (feats.sec3 == "-").to_numpy() & feats.cbg.isin(list(pool)).to_numpy())
     injected_report(add_complication(feats, rows, pool), rows, with_sec=True)
 
-    print("\n[3] episode rawat inap dipecah menjadi dua klaim")
+    print("\n[3] inpatient episode split into two claims")
     split_df = split_episodes(df, pick(inpatient & (df.los >= 4).to_numpy()))
     new = surprise(model, vocab, nadi.features(split_df), split_df.patient.to_numpy())
     ri = (split_df.service == "RI").to_numpy()
     label = split_df.injected.to_numpy()[ri]
-    report("NADI, kejutan jarak + faskes", (new.gap + new.fac).to_numpy()[ri], label)
+    report("NADI, gap + facility surprisal", (new.gap + new.fac).to_numpy()[ri], label)
     flagged = nadi.rule_flags(split_df).split_episode.to_numpy()[ri]
-    print(f"  aturan pasti: menangkap {flagged[label].mean():.0%} sisipan, menandai {flagged[~label].sum()} klaim asli")
+    print(f"  rule-based: recall {flagged[label].mean():.0%}, flags {flagged[~label].sum()} original claims")
 
     save_scored(df, train, inpatient, nll, p_sev)
 

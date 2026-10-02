@@ -1,7 +1,7 @@
-"""Aplikasi web SmartGuard JKN: antrean prioritas dan simulator klaim.
+"""SmartGuard JKN web app: priority queue and claim simulator.
 
-Jalankan: uvicorn app:app
-Butuh artifacts/nadi.pt (train.py) dan artifacts/scored.parquet (evaluate.py).
+Run: uvicorn app:app
+Needs artifacts/nadi.pt (train.py) and artifacts/scored.parquet (evaluate.py).
 """
 import json
 from pathlib import Path
@@ -17,15 +17,15 @@ import nadi
 
 LEVELS = ["I", "II", "III"]
 SEC = ["sec1", "sec2", "sec3"]
-ODD_BELOW = 0.05  # peluang di bawah ini ditandai janggal
-# hanya field dengan sedikit pilihan nilai; di dx/CBG peluang kecil itu wajar
+ANOMALY_BELOW = 0.05  # probability under this is flagged
+# only fields with few possible values; a low probability on dx/CBG is normal
 FLAGGABLE = {"gap", "fac", "los", "sev"}
-LABELS = {
-    "demo": "Jenis kelamin & usia", "gap": "Jarak dari klaim sebelumnya (hari)",
-    "fac": "Faskes dibanding klaim sebelumnya", "svc": "Jenis layanan", "cls": "Kelas RS",
-    "dx": "Diagnosis utama", "cbg": "Kelompok INA-CBG", "los": "Lama rawat (hari)",
+LABELS = {  # shown in the UI
+    "demo": "Jenis kelamin & usia", "gap": "Gap dari klaim sebelumnya (hari)",
+    "fac": "Faskes vs klaim sebelumnya", "svc": "Jenis layanan", "cls": "Kelas RS",
+    "dx": "Diagnosis primer", "cbg": "Kode INA-CBG", "los": "LOS (hari)",
     "sec1": "Diagnosis sekunder 1", "sec2": "Diagnosis sekunder 2", "sec3": "Diagnosis sekunder 3",
-    "sev": "Tingkat keparahan",
+    "sev": "Severity level",
 }
 
 model, vocab = nadi.load("artifacts/nadi.pt", device="cpu")
@@ -39,17 +39,11 @@ OPTIONS = {
     "sec": [[code, NAMES["dx"].get(code, "")] for code in sorted(nadi.field_ids(vocab, "sec1")) if code != "-"],
 }
 
-
-def name_of(field: str, value: str) -> str:
-    """Nama diagnosis atau kelompok CBG untuk ditampilkan; kosong untuk field lain."""
-    kind = "cbg" if field == "cbg" else "dx" if field in ("dx", *SEC) else None
-    return NAMES[kind].get(value, "") if kind else ""
-
 app = FastAPI(title="SmartGuard JKN")
 
 
 class Changes(BaseModel):
-    """Field klaim yang boleh diubah di simulator."""
+    """Claim fields the simulator is allowed to change."""
     model_config = ConfigDict(extra="forbid")
     sev: Optional[str] = Field(None, max_length=8)
     los: Optional[str] = Field(None, max_length=8)
@@ -58,22 +52,28 @@ class Changes(BaseModel):
     sec3: Optional[str] = Field(None, max_length=8)
 
 
+def name_of(field: str, value: str) -> str:
+    """Display name of a dx or CBG code; empty for other fields."""
+    kind = "cbg" if field == "cbg" else "dx" if field in ("dx", *SEC) else None
+    return NAMES[kind].get(value, "") if kind else ""
+
+
 def history(row: int) -> pd.DataFrame:
-    """Klaim peserta yang berada di potongan urutan yang sama dengan klaim `row`."""
+    """The patient's claims that share a sequence chunk with claim `row`."""
     if not 0 <= row < len(claims):
-        raise HTTPException(404, "klaim tidak ditemukan")
+        raise HTTPException(404, "claim not found")
     rows = np.flatnonzero(claims.patient.to_numpy() == claims.patient[row])
     chunk = (rows - rows[0]) // nadi.MAX_VISITS
     return claims.iloc[rows[chunk == chunk[rows == row][0]]]
 
 
 def assess(row: int, changes: dict) -> dict:
-    """Peluang model untuk tiap field klaim `row`, setelah `changes` diterapkan."""
+    """Model probability of every field of claim `row`, after applying `changes`."""
     visits = history(row)
     patient = claims[claims.patient == claims.patient[row]]
     feats = nadi.features(patient).loc[visits.index]
     feats.loc[row, list(changes)] = list(changes.values())
-    codes = sorted(c for c in feats.loc[row, SEC] if c != "-")  # urutan dx sekunder harus tetap baku
+    codes = sorted(c for c in feats.loc[row, SEC] if c != "-")  # secondary dx must stay in canonical order
     feats.loc[row, SEC] = codes + ["-"] * (len(SEC) - len(codes))
 
     X = nadi.encode(feats, vocab)[None]
@@ -82,8 +82,8 @@ def assess(row: int, changes: dict) -> dict:
     p_sev = nadi.field_probs(model, X, "sev", SEV_IDS)[0, at]
     return {
         "fields": [
-            {"field": f, "label": LABELS[f], "value": feats.at[row, f], "name": name_of(f, feats.at[row, f]), "p": float(p),
-             "odd": f in FLAGGABLE and bool(p < ODD_BELOW)}
+            {"field": f, "label": LABELS[f], "value": feats.at[row, f], "name": name_of(f, feats.at[row, f]),
+             "p": float(p), "anomaly": f in FLAGGABLE and bool(p < ANOMALY_BELOW)}
             for f, p in zip(nadi.FIELDS, p_field)
         ],
         "severity": [

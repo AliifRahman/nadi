@@ -1,8 +1,9 @@
-"""NADI: model bahasa kecil untuk urutan klaim JKN.
+"""NADI: a small language model over JKN claim sequences.
 
-Tiap klaim diubah menjadi deretan token tetap (FIELDS). Model bergaya GPT belajar
-menebak token berikutnya dari riwayat klaim peserta. Makin kecil peluang yang
-diberikan model pada nilai yang ditagihkan, makin janggal klaim itu.
+Each claim becomes a fixed row of tokens (FIELDS). A GPT-style model learns to
+predict the next token from the patient's claim history. The lower the
+probability the model gives to the value that was actually claimed, the more
+anomalous the claim.
 """
 import numpy as np
 import pandas as pd
@@ -10,36 +11,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# urutan penting: keparahan paling akhir supaya ditebak dari semua field lain
+# order matters: severity comes last so it is predicted from every other field
 FIELDS = ["demo", "gap", "fac", "svc", "cls", "dx", "cbg", "los", "sec1", "sec2", "sec3", "sev"]
-MAX_VISITS = 20  # klaim per potongan urutan
-MIN_COUNT = 5    # nilai yang lebih jarang dari ini dipetakan ke "?" (tak dikenal)
+MAX_VISITS = 20  # claims per sequence chunk
+MIN_COUNT = 5    # rarer values are mapped to "?" (unknown)
 PAD = 0
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
 
 def is_test(patient) -> np.ndarray:
-    """10% peserta disisihkan untuk uji; pembagian per peserta, bukan per klaim."""
+    """Hold out 10% of patients. The split is per patient, never per claim."""
     return np.asarray(patient) % 10 == 0
 
 
-# ---------------------------------------------------------------- tokenisasi
+# -------------------------------------------------------------- tokenization
 
 def _bucket(values: pd.Series, edges: list, labels: list) -> pd.Series:
     return pd.cut(values, [-np.inf, *edges, np.inf], labels=labels).astype(str)
 
 
 def features(df: pd.DataFrame) -> pd.DataFrame:
-    """Klaim bersih (urut per peserta dan tanggal) -> nilai kategorikal per field."""
+    """Clean claims (sorted by patient and date) -> one categorical value per field."""
     prev = df.groupby("patient")[["discharge", "hospital"]].shift()
     first = prev.discharge.isna()
     gap = (df.admit - prev.discharge).dt.days
     age = _bucket(df.age, [-1, 4, 17, 39, 59], ["?", "0-4", "5-17", "18-39", "40-59", "60+"])
     return pd.DataFrame({
         "demo": df.sex + ":" + age,
-        "gap": _bucket(gap, [0, 1, 7, 30, 90], ["0", "1", "2-7", "8-30", "31-90", "90+"]).mask(first, "awal"),
-        "fac": pd.Series(np.where(df.hospital == prev.hospital, "sama", "beda"), df.index).mask(first, "awal"),
+        "gap": _bucket(gap, [0, 1, 7, 30, 90], ["0", "1", "2-7", "8-30", "31-90", "90+"]).mask(first, "first"),
+        "fac": pd.Series(np.where(df.hospital == prev.hospital, "same", "diff"), df.index).mask(first, "first"),
         "svc": df.service,
         "cls": df.hosp_class.astype(str),
         "dx": df.dx,
@@ -53,7 +54,7 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prefix(field: str) -> str:
-    return field.rstrip("123")  # sec1..sec3 berbagi kosakata yang sama
+    return field.rstrip("123")  # sec1..sec3 share one vocabulary
 
 
 def build_vocab(feats: pd.DataFrame) -> dict:
@@ -67,7 +68,7 @@ def build_vocab(feats: pd.DataFrame) -> dict:
 
 
 def encode(feats: pd.DataFrame, vocab: dict) -> np.ndarray:
-    """[n_klaim, n_field] id token; nilai di luar kosakata menjadi '?'."""
+    """Token ids, shape [n_claims, n_fields]. Out-of-vocab values become '?'."""
     columns = [
         (_prefix(f) + "=" + feats[f]).map(vocab).fillna(vocab[f"{_prefix(f)}=?"])
         for f in FIELDS
@@ -76,18 +77,24 @@ def encode(feats: pd.DataFrame, vocab: dict) -> np.ndarray:
 
 
 def to_sequences(tokens: np.ndarray, patient: np.ndarray):
-    """Susun klaim per peserta menjadi potongan MAX_VISITS klaim.
+    """Group claims per patient into chunks of MAX_VISITS claims.
 
-    Mengembalikan X [n_potongan, MAX_VISITS, n_field] serta (chunk, pos) tiap klaim.
+    Returns X [n_chunks, MAX_VISITS, n_fields] and the (chunk, pos) of every claim.
     """
-    # shortcut: potongan tetap, klaim pertama tiap potongan tidak melihat riwayat
-    # sebelumnya; ganti jendela geser jika riwayat panjang terbukti penting
+    # shortcut: fixed chunks, so the first claim of each chunk sees no earlier
+    # history; switch to a sliding window if long histories turn out to matter
     order = pd.Series(patient).groupby(patient).cumcount().to_numpy()
     chunk = pd.factorize(patient * 1000 + order // MAX_VISITS)[0]
     pos = order % MAX_VISITS
     X = np.full((chunk.max() + 1, MAX_VISITS, len(FIELDS)), PAD, dtype=np.int64)
     X[chunk, pos] = tokens
     return X, chunk, pos
+
+
+def field_ids(vocab: dict, field: str) -> dict:
+    """value -> token id for one field, without '?'."""
+    prefix = _prefix(field) + "="
+    return {t[len(prefix):]: i for t, i in vocab.items() if t.startswith(prefix) and not t.endswith("=?")}
 
 
 # --------------------------------------------------------------------- model
@@ -130,7 +137,7 @@ class Nadi(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, tokens):
-        """tokens [B, L] -> logits [B, L, V]; logits[:, t] menebak tokens[:, t] dari token sebelumnya."""
+        """tokens [B, L] -> logits [B, L, V]; logits[:, t] predicts tokens[:, t] from the tokens before it."""
         x = F.pad(tokens[:, :-1], (1, 0), value=PAD)
         h = self.tok(x) + self.pos(torch.arange(x.shape[1], device=x.device))
         for block in self.blocks:
@@ -149,17 +156,11 @@ def load(path, device: str = DEVICE):
     return model.to(device).eval(), ckpt["vocab"]
 
 
-def field_ids(vocab: dict, field: str) -> dict:
-    """nilai -> id token untuk satu field, tanpa '?'."""
-    prefix = _prefix(field) + "="
-    return {t[len(prefix):]: i for t, i in vocab.items() if t.startswith(prefix) and not t.endswith("=?")}
-
-
-# ------------------------------------------------------------------ penilaian
+# ------------------------------------------------------------------- scoring
 
 @torch.no_grad()
 def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
-    """Kejutan (negatif log-peluang) tiap token; bentuk sama dengan X."""
+    """Surprisal (negative log-likelihood) of every token; same shape as X."""
     device = next(model.parameters()).device
     out = np.zeros(X.shape, dtype=np.float32)
     for i in range(0, len(X), batch):
@@ -171,7 +172,7 @@ def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
 
 @torch.no_grad()
 def field_probs(model: Nadi, X: np.ndarray, field: str, ids: list, batch: int = 64) -> np.ndarray:
-    """Peluang tiap nilai kandidat `ids` untuk `field` di setiap klaim: [n, klaim, len(ids)]."""
+    """Probability of each candidate token in `ids` for `field`, per claim: [n, claims, len(ids)]."""
     device = next(model.parameters()).device
     col = FIELDS.index(field)
     out = []
@@ -183,11 +184,11 @@ def field_probs(model: Nadi, X: np.ndarray, field: str, ids: list, batch: int = 
 
 
 def rule_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """Aturan pasti untuk pola yang tidak butuh model. `df` urut per peserta dan tanggal."""
+    """Rule-based checks for patterns that need no model. `df` sorted by patient and date."""
     prev = df.groupby("patient")[["discharge", "hospital", "dx", "service"]].shift()
     gap = (df.admit - prev.discharge).dt.days
     return pd.DataFrame({
-        # rawat inap lanjutan di RS dan diagnosis yang sama, paling lama sehari setelah pulang
+        # readmission to the same hospital with the same dx, at most a day after discharge
         "split_episode": (df.service == "RI") & (prev.service == "RI") & (gap <= 1)
                          & (df.hospital == prev.hospital) & (df.dx == prev.dx),
         "duplicate": df.duplicated(["patient", "admit", "discharge", "hospital", "cbg", "dx", "severity"]),

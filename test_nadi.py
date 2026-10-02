@@ -1,4 +1,4 @@
-"""Cek cepat tokenisasi dan aturan pasti. Jalankan: python test_nadi.py"""
+"""Quick check for the tokenizer and the rule-based flags. Run: python test_nadi.py"""
 import pandas as pd
 
 import nadi
@@ -19,16 +19,16 @@ def demo() -> None:
     })
 
     feats = nadi.features(df)
-    assert feats.gap.tolist() == ["awal", "1", "31-90", "awal"]
-    assert feats.fac.tolist() == ["awal", "sama", "beda", "awal"]
+    assert feats.gap.tolist() == ["first", "1", "31-90", "first"]
+    assert feats.fac.tolist() == ["first", "same", "diff", "first"]
     assert feats.los.tolist() == ["4-5", "3", "0", "0"]
     assert feats.demo.tolist() == ["L:18-39", "L:18-39", "L:18-39", "P:?"]
     assert feats.sec1.tolist() == ["-", "E86", "-", "-"]
 
-    # rawat inap lanjutan sehari setelah pulang, RS dan diagnosis sama
+    # readmitted a day after discharge, same hospital and dx
     assert nadi.rule_flags(df).split_episode.tolist() == [False, True, False, False]
 
-    vocab = nadi.build_vocab(feats)  # data sekecil ini: semua nilai jatuh ke "?"
+    vocab = nadi.build_vocab(feats)  # with data this small every value falls back to "?"
     tokens = nadi.encode(feats, vocab)
     assert (tokens[:, nadi.FIELDS.index("dx")] == vocab["dx=?"]).all()
     X, chunk, pos = nadi.to_sequences(tokens, df.patient.to_numpy())

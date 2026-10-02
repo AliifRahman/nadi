@@ -1,4 +1,4 @@
-"""Latih NADI dari data/claims.parquet. Hasil: artifacts/nadi.pt"""
+"""Train NADI on data/claims.parquet. Output: artifacts/nadi.pt"""
 import math
 import time
 from pathlib import Path
@@ -13,12 +13,12 @@ import nadi
 STEPS = 5000
 WARMUP = 200
 LR = 1e-3
-TOKENS_PER_BATCH = 12_000  # muat di GPU laptop 8 GB
+TOKENS_PER_BATCH = 12_000  # fits the GPU of an 8 GB laptop
 OUT = Path("artifacts/nadi.pt")
 
 
 def batches(X: np.ndarray, n_visits: np.ndarray, rng: np.random.Generator):
-    """Batch berisi urutan yang panjangnya mirip, dipilih sebanding jumlah tokennya."""
+    """Batches of similar-length sequences, sampled in proportion to their token count."""
     order = np.argsort(n_visits, kind="stable")
     lengths = n_visits[order]
     cdf = np.cumsum(lengths) / lengths.sum()
@@ -27,7 +27,7 @@ def batches(X: np.ndarray, n_visits: np.ndarray, rng: np.random.Generator):
         size = max(8, TOKENS_PER_BATCH // (lengths[center] * X.shape[2]))
         start = int(np.clip(center - size // 2, 0, len(order) - size))
         rows = order[start:start + size]
-        yield X[rows, :lengths[start + size - 1]]  # buang padding di ujung
+        yield X[rows, :lengths[start + size - 1]]  # drop trailing padding
 
 
 def loss_on(model, X: np.ndarray) -> torch.Tensor:
@@ -52,8 +52,8 @@ def main() -> None:
     X_val = X[chunk_is_test][:256]
     model = nadi.Nadi(len(vocab)).to(nadi.DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"kosakata {len(vocab):,} | urutan latih {len(X_train):,} | "
-          f"parameter {n_params / 1e6:.1f} juta | {nadi.DEVICE}")
+    print(f"vocab {len(vocab):,} | train sequences {len(X_train):,} | "
+          f"params {n_params / 1e6:.1f}M | {nadi.DEVICE}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     start = time.time()
@@ -72,11 +72,11 @@ def main() -> None:
             with torch.no_grad():
                 val = np.mean([loss_on(model, X_val[i:i + 32]).item() for i in range(0, len(X_val), 32)])
             model.train()
-            print(f"langkah {step:>5} | latih {loss.item():.3f} | uji {val:.3f} | {time.time() - start:>4.0f} dtk")
+            print(f"step {step:>5} | train loss {loss.item():.3f} | val loss {val:.3f} | {time.time() - start:>4.0f}s")
 
     OUT.parent.mkdir(exist_ok=True)
     nadi.save(OUT, model, vocab)
-    print(f"tersimpan di {OUT}")
+    print(f"saved to {OUT}")
 
 
 if __name__ == "__main__":
