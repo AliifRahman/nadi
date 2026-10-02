@@ -6,3 +6,7 @@ __pycache__/
 data/
 artifacts/
 *.dta
+
+# dokumen pribadi dan bahan proposal
+prestasialif/
+proposal/
