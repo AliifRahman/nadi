@@ -1,8 +1,10 @@
 """Bersihkan Data Sampel BPJS Kesehatan (.dta) menjadi satu tabel klaim RS.
 
 Pakai : python prepare.py "<folder data sampel>/data"
-Hasil : data/claims.parquet, satu baris per klaim, urut per peserta dan tanggal.
+Hasil : data/claims.parquet, satu baris per klaim, urut per peserta dan tanggal,
+        dan data/names.json berisi nama diagnosis dan kelompok CBG untuk tampilan.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -10,13 +12,14 @@ import numpy as np
 import pandas as pd
 
 OUT = Path("data/claims.parquet")
+NAMES = Path("data/names.json")
 SEVERITIES = ["0", "I", "II", "III"]
 MAX_SECONDARY = 3  # diagnosis sekunder yang disimpan per klaim
 
 CLAIM_COLUMNS = {
     "PSTV01": "patient", "PSTV15": "weight", "FKL02": "visit_id",
     "FKL03": "admit", "FKL04": "discharge", "FKL09": "hosp_class",
-    "FKL10": "service", "FKL17A": "dx", "FKL19": "cbg_full",
+    "FKL10": "service", "FKL17A": "dx", "FKL19": "cbg_full", "FKL19A": "cbg_name",
     "FKL47": "billed", "FKL48": "cost",
 }
 
@@ -33,14 +36,17 @@ def anonymize(ids: pd.Series, seed: int) -> np.ndarray:
     return np.random.default_rng(seed).permutation(len(uniques))[codes]
 
 
-def secondary_diagnoses(folder: Path) -> pd.DataFrame:
-    sec = read(folder, "diagnosissekunder", {"FKL02": "visit_id", "FKL24A": "code"})
-    sec = sec[sec.code.str.len() == 3].drop_duplicates().sort_values(["visit_id", "code"])
+def secondary_diagnoses(folder: Path):
+    """Diagnosis sekunder per klaim (melebar), dan nama tiap kode ICD-10 3 digit."""
+    sec = read(folder, "diagnosissekunder", {"FKL02": "visit_id", "FKL24A": "code", "FKL24B": "label"})
+    sec = sec[sec.code.str.len() == 3]
+    names = sec.drop_duplicates("code").set_index("code").label.str[4:]  # "Z37 Outcome of delivery"
+    sec = sec[["visit_id", "code"]].drop_duplicates().sort_values(["visit_id", "code"])
     sec["slot"] = sec.groupby("visit_id").cumcount()
     wide = sec[sec.slot < MAX_SECONDARY].pivot(index="visit_id", columns="slot", values="code")
     wide.columns = [f"sec{i + 1}" for i in wide.columns]
     wide["nsec"] = sec.groupby("visit_id").size()
-    return wide
+    return wide, names
 
 
 def main(folder: Path) -> None:
@@ -69,19 +75,24 @@ def main(folder: Path) -> None:
     df["age"] = ((df.admit - df.birth).dt.days // 365.25).fillna(-1).astype("int16")
     df["sex"] = df.sex.map({1: "L", 2: "P"})
 
-    df = df.join(secondary_diagnoses(folder), on="visit_id")
+    secondary, dx_names = secondary_diagnoses(folder)
+    df = df.join(secondary, on="visit_id")
     df["nsec"] = df.nsec.fillna(0).astype("int16")
 
     df["patient"] = anonymize(df.patient, seed=1)
     df["hospital"] = anonymize(df.hospital, seed=2)
     df = df.sort_values(["patient", "admit", "discharge"]).reset_index(drop=True)
-    df = df.drop(columns=["visit_id", "cbg_full", "birth"])
+    # nama kelompok CBG tanpa embel-embel tingkat keparahan di ujungnya
+    cbg_names = df.drop_duplicates("cbg").set_index("cbg").cbg_name
+    cbg_names = cbg_names.str.replace(r"\s*\(?(RINGAN|SEDANG|BERAT)\)?$", "", regex=True)
+    df = df.drop(columns=["visit_id", "cbg_full", "cbg_name", "birth"])
 
     assert df[["patient", "hospital", "dx", "cbg", "severity", "service"]].notna().all().all()
     assert (df.los >= 0).all()
 
     OUT.parent.mkdir(exist_ok=True)
     df.to_parquet(OUT, index=False)
+    NAMES.write_text(json.dumps({"dx": dx_names.to_dict(), "cbg": cbg_names.to_dict()}))
     print(f"klaim bersih              : {len(df):>9,}  ->  {OUT}")
     print(f"peserta {df.patient.nunique():,} | faskes {df.hospital.nunique():,} | "
           f"rawat inap {(df.service == 'RI').sum():,}")

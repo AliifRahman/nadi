@@ -42,6 +42,7 @@
   .scroll { overflow: auto; max-height: 72vh; }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  #detail td:nth-child(2) { white-space: normal; }
   th { color: var(--text-2); font-weight: 500; position: sticky; top: 0; background: var(--raised); }
   td.num, th.num { text-align: right; }
   .flag { color: var(--critical); background: var(--critical-bg); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
@@ -128,8 +129,8 @@ async function loadQueue(kind) {
   const body = rows.map(c => h("tr", {},
     h("td", {}, h("button", { onclick: () => loadClaim(c.row) }, `#${c.patient}`)),
     h("td", {}, hospitalClass(c.hosp_class)),
-    h("td", {}, c.dx),
-    h("td", {}, c.cbg),
+    h("td", { title: c.dx_name }, c.dx),
+    h("td", { title: c.cbg_name }, c.cbg),
     ...(kind === "model"
       ? [h("td", {}, `${c.severity} → ${c.expected}`), h("td", { className: "num" }, percent(c.p_claimed)), h("td", { className: "num" }, compact(c.potential))]
       : [h("td", {}, ...flags(c)), h("td", { className: "num" }, compact(c.cost))]),
@@ -155,7 +156,8 @@ function assessment(data) {
   const fields = h("table", {},
     h("thead", {}, h("tr", {}, ...["Field", "Nilai", "Peluang nilai ini", ""].map(t => h("th", {}, t)))),
     h("tbody", {}, ...data.fields.map(f => h("tr", {},
-      h("td", {}, f.label), h("td", {}, f.field === "cls" ? hospitalClass(f.value) : f.value),
+      h("td", {}, f.label),
+      h("td", {}, f.field === "cls" ? hospitalClass(f.value) : f.value, f.name ? h("span", { className: "muted" }, " · " + f.name) : null),
       h("td", {}, h("span", { className: "meter" }, h("i", { style: `width:${f.p * 100}%` })), " " + percent(f.p)),
       h("td", {}, f.odd ? h("span", { className: "flag" }, "⚠ janggal") : null)))));
   return [hero, claimed ? bars : null, h("section", {}, h("h2", {}, "Peluang tiap field"), h("div", { className: "scroll" }, fields))];
@@ -165,7 +167,7 @@ async function loadClaim(row) {
   const data = await api(`/api/claim/${row}`);
   const current = data.visits.find(v => v.row === row);
   const value = field => data.fields.find(f => f.field === field).value;
-  document.getElementById("sec-options").replaceChildren(...data.options.sec.map(v => h("option", { value: v })));
+  document.getElementById("sec-options").replaceChildren(...data.options.sec.map(([value, label]) => h("option", { value, label })));
 
   const result = h("div", {}, ...assessment(data));
   const controls = {};
@@ -183,8 +185,9 @@ async function loadClaim(row) {
 
   document.getElementById("detail").replaceChildren(
     h("h2", {}, `Perjalanan peserta #${current.patient} · RS #${current.hospital} (${hospitalClass(current.hosp_class)})`),
+    h("p", { className: "muted" }, `${current.dx} ${current.dx_name} · ${current.cbg} ${current.cbg_name}`),
     h("ol", {}, ...data.visits.map(v => h("li", { ariaCurrent: v.row === row },
-      h("button", { onclick: () => loadClaim(v.row) },
+      h("button", { onclick: () => loadClaim(v.row), title: `${v.dx_name} · ${v.cbg_name}` },
         h("span", {}, `${v.admit} · ${v.service} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
         h("span", {}, ...flags(v), v.service === "RI" && v.p_claimed < 0.05 ? h("span", { className: "flag" }, "⚠ keparahan") : null))))),
     h("h2", {}, "Simulator: ubah klaim, lihat penilaian model"),

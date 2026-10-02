@@ -3,6 +3,8 @@
 Jalankan: uvicorn app:app
 Butuh artifacts/nadi.pt (train.py) dan artifacts/scored.parquet (evaluate.py).
 """
+import json
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -29,12 +31,19 @@ LABELS = {
 model, vocab = nadi.load("artifacts/nadi.pt", device="cpu")
 claims = pd.read_parquet("artifacts/scored.parquet")
 claims["priority"] = claims.potential * (1 - claims.p_claimed)
+NAMES = json.loads(Path("data/names.json").read_text())
 SEV_IDS = [nadi.field_ids(vocab, "sev")[level] for level in LEVELS]
 OPTIONS = {
     "sev": LEVELS,
     "los": ["0", "1", "2", "3", "4-5", "6-7", "8-14", "15+"],
-    "sec": ["-", *sorted(v for v in nadi.field_ids(vocab, "sec1") if v != "-")],
+    "sec": [[code, NAMES["dx"].get(code, "")] for code in sorted(nadi.field_ids(vocab, "sec1")) if code != "-"],
 }
+
+
+def name_of(field: str, value: str) -> str:
+    """Nama diagnosis atau kelompok CBG untuk ditampilkan; kosong untuk field lain."""
+    kind = "cbg" if field == "cbg" else "dx" if field in ("dx", *SEC) else None
+    return NAMES[kind].get(value, "") if kind else ""
 
 app = FastAPI(title="SmartGuard JKN")
 
@@ -73,7 +82,7 @@ def assess(row: int, changes: dict) -> dict:
     p_sev = nadi.field_probs(model, X, "sev", SEV_IDS)[0, at]
     return {
         "fields": [
-            {"field": f, "label": LABELS[f], "value": feats.at[row, f], "p": float(p),
+            {"field": f, "label": LABELS[f], "value": feats.at[row, f], "name": name_of(f, feats.at[row, f]), "p": float(p),
              "odd": f in FLAGGABLE and bool(p < ODD_BELOW)}
             for f, p in zip(nadi.FIELDS, p_field)
         ],
@@ -87,7 +96,10 @@ def assess(row: int, changes: dict) -> dict:
 def as_records(df: pd.DataFrame) -> list:
     cols = ["patient", "hospital", "hosp_class", "admit", "service", "dx", "cbg", "severity", "expected",
             "los", "cost", "p_claimed", "potential", "split_episode", "duplicate"]
-    out = df[cols].assign(admit=df.admit.dt.strftime("%Y-%m-%d"), row=df.index)
+    out = df[cols].assign(
+        admit=df.admit.dt.strftime("%Y-%m-%d"), row=df.index,
+        dx_name=df.dx.map(NAMES["dx"]).fillna(""), cbg_name=df.cbg.map(NAMES["cbg"]).fillna(""),
+    )
     return out.to_dict("records")
 
 
