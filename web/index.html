@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartGuard JKN</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --raised: #ffffff; --line: #e4e3df;
+    --text: #0b0b0b; --text-2: #52514e;
+    --series: #2a78d6; --track: #cde2fb;
+    --critical: #d03b3b; --critical-bg: #fbeaea; --good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --raised: #232322; --line: #383835;
+      --text: #ffffff; --text-2: #c3c2b7;
+      --series: #3987e5; --track: #104281;
+      --critical: #e66767; --critical-bg: #3a2222; --good: #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px 0; }
+  h1 { margin: 0; font-size: 20px; }
+  h2 { margin: 0 0 12px; font-size: 15px; }
+  .muted { color: var(--text-2); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; padding: 16px 24px; }
+  .tile, .card { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
+  .tile { padding: 12px 14px; }
+  .tile b { display: block; font-size: 22px; font-weight: 600; }
+  main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 0 24px 24px; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .card { padding: 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  button { font: inherit; color: inherit; background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover, button:focus-visible { border-color: var(--series); }
+  button[aria-pressed="true"], li[aria-current="true"] button { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  .scroll { overflow: auto; max-height: 72vh; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--text-2); font-weight: 500; position: sticky; top: 0; background: var(--raised); }
+  td.num, th.num { text-align: right; }
+  .flag { color: var(--critical); background: var(--critical-bg); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
+  .ok { color: var(--text-2); font-size: 12px; }
+  .hero { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 14px; flex-wrap: wrap; }
+  .hero b { font-size: 52px; font-weight: 600; line-height: 1; }
+  .bars { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 12px; align-items: center; }
+  .track { height: 20px; }
+  .fill { height: 100%; min-width: 2px; background: var(--series); border-radius: 0 4px 4px 0; transition: width .35s ease; }
+  .meter { height: 6px; width: 90px; background: var(--track); border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; }
+  .meter i { display: block; height: 100%; background: var(--series); }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+  select, input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  ol { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+  ol button { width: 100%; text-align: left; display: flex; gap: 10px; justify-content: space-between; }
+  section { margin-top: 20px; }
+  footer { padding: 0 24px 24px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SmartGuard JKN <span class="muted">· NADI</span></h1>
+  <p class="muted">Prioritas verifikasi klaim rawat inap. Model membaca riwayat klaim peserta dan menandai nilai yang janggal.</p>
+</header>
+<div class="tiles" id="tiles"></div>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button id="tab-model" aria-pressed="true">Keparahan di atas perkiraan</button>
+      <button id="tab-rules" aria-pressed="false">Aturan pasti</button>
+    </div>
+    <div class="scroll"><table id="queue"></table></div>
+  </div>
+  <div class="card" id="detail"><p class="muted">Pilih satu klaim dari antrean.</p></div>
+</main>
+<footer class="muted">Skor adalah prioritas periksa, bukan kesimpulan. Keputusan tetap pada verifikator. Data: sampel uji yang dianonimkan.</footer>
+<datalist id="sec-options"></datalist>
+
+<script>
+const number = new Intl.NumberFormat("id-ID");
+const compact = (n, display = "short") => "Rp" + new Intl.NumberFormat("id-ID", { notation: "compact", compactDisplay: display, maximumFractionDigits: 1 }).format(n);
+const percent = p => p < 0.001 ? "<0,1%" : (p * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + "%";
+const CLASSES = { 1: "Kelas A", 2: "Kelas B", 3: "Kelas C", 4: "Kelas D", 5: "Swasta setara A", 6: "Swasta setara B", 7: "Swasta setara C", 8: "Swasta setara D" };
+const hospitalClass = c => CLASSES[c] || "khusus/lainnya";
+
+// elemen DOM dari teks biasa, tanpa innerHTML
+function h(tag, props = {}, ...children) {
+  const el = Object.assign(document.createElement(tag), props);
+  el.append(...children.filter(c => c != null));
+  return el;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body && { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+function flags(c) {
+  return [c.split_episode && "Episode dipecah", c.duplicate && "Klaim ganda"].filter(Boolean)
+    .map(text => h("span", { className: "flag" }, "⚠ " + text));
+}
+
+async function loadTiles() {
+  const s = await api("/api/summary");
+  const tiles = [
+    ["Klaim uji", number.format(s.claims)],
+    ["Rawat inap", number.format(s.inpatient)],
+    ["Keparahan di atas perkiraan", number.format(s.above)],
+    ["Potensi selisih (kasar)", compact(s.potential, "long")],
+    ["Terkena aturan pasti", number.format(s.rules)],
+  ];
+  document.getElementById("tiles").replaceChildren(...tiles.map(([label, value]) =>
+    h("div", { className: "tile" }, h("span", { className: "muted" }, label), h("b", {}, value))));
+}
+
+async function loadQueue(kind) {
+  for (const k of ["model", "rules"]) document.getElementById("tab-" + k).setAttribute("aria-pressed", k === kind);
+  const rows = await api(`/api/queue?kind=${kind}`);
+  const head = kind === "model"
+    ? ["Klaim", "Kelas RS", "Dx", "CBG", "Ditagih → perkiraan", "Peluang", "Potensi"]
+    : ["Klaim", "Kelas RS", "Dx", "CBG", "Aturan", "Biaya"];
+  const body = rows.map(c => h("tr", {},
+    h("td", {}, h("button", { onclick: () => loadClaim(c.row) }, `#${c.patient}`)),
+    h("td", {}, hospitalClass(c.hosp_class)),
+    h("td", {}, c.dx),
+    h("td", {}, c.cbg),
+    ...(kind === "model"
+      ? [h("td", {}, `${c.severity} → ${c.expected}`), h("td", { className: "num" }, percent(c.p_claimed)), h("td", { className: "num" }, compact(c.potential))]
+      : [h("td", {}, ...flags(c)), h("td", { className: "num" }, compact(c.cost))]),
+  ));
+  document.getElementById("queue").replaceChildren(
+    h("thead", {}, h("tr", {}, ...head.map(t => h("th", { className: ["Peluang", "Potensi", "Biaya"].includes(t) ? "num" : "" }, t)))),
+    h("tbody", {}, ...body));
+}
+
+function assessment(data) {
+  const claimed = data.severity.find(s => s.claimed);
+  const sev = data.fields.find(f => f.field === "sev");
+  const hero = claimed
+    ? h("div", { className: "hero" }, h("b", {}, percent(claimed.p)),
+        h("span", {}, `peluang keparahan ${claimed.level} yang ditagihkan, menurut model`),
+        sev.odd ? h("span", { className: "flag" }, "⚠ Janggal, prioritas periksa") : h("span", { className: "ok" }, "✓ Wajar"))
+    : h("p", { className: "muted" }, "Klaim rawat jalan tidak punya tingkat keparahan.");
+  const bars = h("div", { className: "bars" }, ...data.severity.flatMap(s => [
+    h("span", {}, `Keparahan ${s.level}`, s.claimed ? h("span", { className: "muted" }, " · ditagihkan") : null),
+    h("div", { className: "track", title: `Keparahan ${s.level}: ${percent(s.p)}` }, h("div", { className: "fill", style: `width:${s.p * 100}%` })),
+    h("span", {}, percent(s.p)),
+  ]));
+  const fields = h("table", {},
+    h("thead", {}, h("tr", {}, ...["Field", "Nilai", "Peluang nilai ini", ""].map(t => h("th", {}, t)))),
+    h("tbody", {}, ...data.fields.map(f => h("tr", {},
+      h("td", {}, f.label), h("td", {}, f.field === "cls" ? hospitalClass(f.value) : f.value),
+      h("td", {}, h("span", { className: "meter" }, h("i", { style: `width:${f.p * 100}%` })), " " + percent(f.p)),
+      h("td", {}, f.odd ? h("span", { className: "flag" }, "⚠ janggal") : null)))));
+  return [hero, claimed ? bars : null, h("section", {}, h("h2", {}, "Peluang tiap field"), h("div", { className: "scroll" }, fields))];
+}
+
+async function loadClaim(row) {
+  const data = await api(`/api/claim/${row}`);
+  const current = data.visits.find(v => v.row === row);
+  const value = field => data.fields.find(f => f.field === field).value;
+  document.getElementById("sec-options").replaceChildren(...data.options.sec.map(v => h("option", { value: v })));
+
+  const result = h("div", {}, ...assessment(data));
+  const controls = {};
+  const simulate = async () => {
+    const changes = Object.fromEntries(Object.entries(controls).map(([k, el]) => [k, el.value.trim().toUpperCase() || "-"]));
+    result.replaceChildren(...assessment(await api(`/api/claim/${row}/simulate`, changes)));
+  };
+  const select = (field, options) => controls[field] = h("select", { onchange: simulate },
+    ...options.map(o => h("option", { value: o, selected: o === value(field) }, o)));
+  const input = field => controls[field] = h("input", { value: value(field), onchange: simulate });
+  input("sec1").setAttribute("list", "sec-options");
+  input("sec2").setAttribute("list", "sec-options");
+  input("sec3").setAttribute("list", "sec-options");
+  const inpatient = current.service === "RI";
+
+  document.getElementById("detail").replaceChildren(
+    h("h2", {}, `Perjalanan peserta #${current.patient} · RS #${current.hospital} (${hospitalClass(current.hosp_class)})`),
+    h("ol", {}, ...data.visits.map(v => h("li", { ariaCurrent: v.row === row },
+      h("button", { onclick: () => loadClaim(v.row) },
+        h("span", {}, `${v.admit} · ${v.service} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
+        h("span", {}, ...flags(v), v.service === "RI" && v.p_claimed < 0.05 ? h("span", { className: "flag" }, "⚠ keparahan") : null))))),
+    h("h2", {}, "Simulator: ubah klaim, lihat penilaian model"),
+    h("div", { className: "controls" },
+      inpatient ? h("label", {}, "Tingkat keparahan", select("sev", data.options.sev)) : null,
+      h("label", {}, "Lama rawat (hari)", select("los", data.options.los)),
+      h("label", {}, "Dx sekunder 1", controls.sec1),
+      h("label", {}, "Dx sekunder 2", controls.sec2),
+      h("label", {}, "Dx sekunder 3", controls.sec3),
+      h("label", {}, " ", h("button", { onclick: () => loadClaim(row) }, "Kembalikan"))),
+    result);
+  document.querySelector('li[aria-current="true"]').scrollIntoView({ block: "nearest" });
+}
+
+document.getElementById("tab-model").onclick = () => loadQueue("model");
+document.getElementById("tab-rules").onclick = () => loadQueue("rules");
+loadTiles();
+loadQueue("model");
+if (location.hash) loadClaim(Number(location.hash.slice(1)));  // tautan langsung ke satu klaim: /#61969
+</script>
+</body>
+</html>
