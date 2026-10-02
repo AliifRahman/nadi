@@ -12,6 +12,7 @@ import nadi
 LEVELS = np.array(["I", "II", "III"])
 SEC = ["sec1", "sec2", "sec3"]
 INJECT_SHARE = 0.05
+TEST_SHARE = 0.1  # nadi.is_test holds out one patient in ten
 rng = np.random.default_rng(0)
 
 
@@ -30,23 +31,23 @@ def report(name: str, score: np.ndarray, injected: np.ndarray) -> None:
           f"recall {injected[top].sum() / n1:.0%}")
 
 
-def n_secondary(feats: pd.DataFrame) -> pd.Series:
-    return (feats[SEC] != "-").sum(axis=1)
+def with_nsec(feats: pd.DataFrame) -> pd.DataFrame:
+    return feats.assign(nsec=(feats[SEC] != "-").sum(axis=1))
 
 
-def severity_table(feats: pd.DataFrame) -> pd.DataFrame:
-    """Simple baseline: P(severity | CBG, number of secondary dx) from train claims."""
-    counts = feats.groupby([feats.cbg, n_secondary(feats), feats.sev]).size().unstack(fill_value=0) + 0.5
+def baseline(feats: pd.DataFrame, keys: list, target: str) -> pd.DataFrame:
+    """Simple baseline: frequency table P(target | keys) from train claims."""
+    counts = feats.groupby([*keys, target]).size().unstack(fill_value=0) + 0.5
     return counts.div(counts.sum(axis=1), axis=0)
 
 
 def table_probs(table: pd.DataFrame, feats: pd.DataFrame) -> np.ndarray:
-    return table.reindex(pd.MultiIndex.from_arrays([feats.cbg, n_secondary(feats)])).to_numpy()
+    return table.reindex(pd.MultiIndex.from_frame(feats[table.index.names])).to_numpy()
 
 
 def table_surprise(table: pd.DataFrame, feats: pd.DataFrame) -> np.ndarray:
     p = table_probs(table, feats)
-    claimed = p[np.arange(len(p)), table.columns.get_indexer(feats.sev)]
+    claimed = p[np.arange(len(p)), table.columns.get_indexer(feats[table.columns.name])]
     return -np.log(np.nan_to_num(claimed, nan=0.01))
 
 
@@ -89,9 +90,13 @@ def save_scored(df, train, inpatient, nll, p_sev) -> None:
     scored["potential"] = np.where(inpatient & (claimed > expected), saving, 0).astype("int64")
     scored.to_parquet("artifacts/scored.parquet", index=False)
 
-    above = scored[scored.potential > 0]
+    above, ri = scored[scored.potential > 0], scored[inpatient]
+    weighted = (above.potential * above.weight).sum()
     print(f"\nsaved artifacts/scored.parquet | inpatient claims above expected severity: {len(above):,}, "
           f"potential gap Rp{above.potential.sum() / 1e9:.2f}B (rough)")
+    # sample weights scale claims to the JKN population; the test set holds TEST_SHARE of patients
+    print(f"= {weighted / (ri.cost * ri.weight).sum():.2%} of inpatient cost, "
+          f"or about Rp{weighted / TEST_SHARE / 1e12:.1f}T per year at national scale (rough)")
 
 
 def main() -> None:
@@ -103,7 +108,8 @@ def main() -> None:
     df, feats = df[is_test].reset_index(drop=True), feats[is_test].reset_index(drop=True)
     patient = df.patient.to_numpy()
     inpatient = (feats.svc == "RI").to_numpy()
-    table = severity_table(train_ri)
+    sev_table = baseline(with_nsec(train_ri), ["cbg", "nsec"], "sev")
+    los_table = baseline(train_ri, ["cbg", "sev"], "los")
 
     X, chunk, pos = nadi.to_sequences(nadi.encode(feats, vocab), patient)
     nll = pd.DataFrame(nadi.surprise(model, X)[chunk, pos], columns=nadi.FIELDS)
@@ -111,7 +117,7 @@ def main() -> None:
     p_sev = nadi.field_probs(model, X, "sev", sev_ids)[chunk, pos]
 
     truth = feats.sev[inpatient].to_numpy()
-    table_guess = table.columns[np.nan_to_num(table_probs(table, feats[inpatient])).argmax(axis=1)]
+    table_guess = sev_table.columns[np.nan_to_num(table_probs(sev_table, with_nsec(feats[inpatient]))).argmax(axis=1)]
     print(f"test claims {len(df):,} (inpatient {inpatient.sum():,}) from {df.patient.nunique():,} patients")
     print(f"inpatient severity accuracy: NADI {np.mean(LEVELS[p_sev[inpatient].argmax(axis=1)] == truth):.1%} | "
           f"baseline table {np.mean(table_guess == truth):.1%} | always 'I' {np.mean(truth == 'I'):.1%}")
@@ -127,7 +133,7 @@ def main() -> None:
         report("NADI, severity surprisal", new.sev.to_numpy()[inpatient], label[inpatient])
         if with_sec:
             report("NADI, secondary dx + severity", new[SEC + ["sev"]].sum(axis=1).to_numpy()[inpatient], label[inpatient])
-        report("baseline table", table_surprise(table, changed[inpatient]), label[inpatient])
+        report("baseline table", table_surprise(sev_table, with_nsec(changed[inpatient])), label[inpatient])
 
     low = inpatient & (feats.sev == "I").to_numpy()
 
@@ -153,7 +159,27 @@ def main() -> None:
     flagged = nadi.rule_flags(split_df).split_episode.to_numpy()[ri]
     print(f"  rule-based: recall {flagged[label].mean():.0%}, flags {flagged[~label].sum()} original claims")
 
+    print("\n[4] prolonged LOS: inpatient stay extended by 3-5 days")
+    rows = pick(inpatient)
+    extra = rng.integers(3, 6, len(rows))
+    longer = df.copy()
+    longer.loc[rows, "los"] += extra
+    longer.loc[rows, "discharge"] += pd.to_timedelta(extra, unit="D")
+    changed = nadi.features(longer)
+    label = np.zeros(len(df), dtype=bool)
+    label[rows] = True
+    new = surprise(model, vocab, changed, patient)
+    report("NADI, LOS surprisal", new.los.to_numpy()[inpatient], label[inpatient])
+    report("baseline table (CBG x severity)", table_surprise(los_table, changed[inpatient]), label[inpatient])
+
     save_scored(df, train, inpatient, nll, p_sev)
+
+    # rules need no training, so count their hits on the whole sample
+    everything = pd.concat([train, df]).sort_values(["patient", "admit", "discharge"])
+    for name, hit in nadi.rule_flags(everything).items():
+        found = everything[hit]
+        print(f"rule {name}: {len(found)} claims in the full sample, "
+              f"weighted {found.weight.sum():,.0f} claims / Rp{(found.cost * found.weight).sum() / 1e9:.1f}B per year")
 
 
 if __name__ == "__main__":
