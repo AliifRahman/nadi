@@ -35,15 +35,23 @@ dengan score tertinggi.
 | Severity dinaikkan I ke II, field lain tetap | recall 96% | 70% |
 | Upcoding realistis: +1 dx sekunder, severity I ke II | recall 49% | 25% |
 | Episode rawat inap dipecah jadi dua klaim | recall 98% | rule: recall 100%, 7 false positive |
+| LOS diperpanjang 3-5 hari | recall 46% | 44% (tabel CBG x severity) |
 
 Di test set asli (tanpa injection) ada 373 klaim rawat inap dengan severity di atas
-prediksi model. Selisihnya terhadap tarif median sekitar Rp1,25 miliar (estimasi kasar).
+prediksi model. Selisihnya terhadap tarif median sekitar Rp1,25 miliar, atau 1,07% dari
+biaya rawat inap. Dengan sampling weight, skalanya sekitar Rp1,0 triliun per tahun
+(estimasi kasar).
+
+Rule di seluruh sample: pemecahan episode kena 89 klaim (weighted 5.892 klaim, sekitar
+Rp36,5 miliar per tahun), repeat billing 26 klaim.
 
 Limitasi:
 
 - Upcoding yang konsisten di level coding baru separuhnya terdeteksi. Bukti klinisnya
   ada di rekam medis, bukan di data klaim.
-- Angka rupiah belum pakai sampling weight, jadi belum bisa diekstrapolasi ke nasional.
+- Untuk prolonged LOS, NADI hampir sama dengan baseline (46% vs 44%).
+- Angka rupiah adalah gap terhadap tarif median berdasarkan prediksi model, bukan
+  temuan audit.
 
 ## Setup
 
