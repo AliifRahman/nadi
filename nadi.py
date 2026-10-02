@@ -149,6 +149,14 @@ def load(path, device: str = DEVICE):
     return model.to(device).eval(), ckpt["vocab"]
 
 
+def field_ids(vocab: dict, field: str) -> dict:
+    """nilai -> id token untuk satu field, tanpa '?'."""
+    prefix = _prefix(field) + "="
+    return {t[len(prefix):]: i for t, i in vocab.items() if t.startswith(prefix) and not t.endswith("=?")}
+
+
+# ------------------------------------------------------------------ penilaian
+
 @torch.no_grad()
 def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
     """Kejutan (negatif log-peluang) tiap token; bentuk sama dengan X."""
@@ -159,3 +167,28 @@ def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
         nll = F.cross_entropy(model(tokens).transpose(1, 2), tokens, reduction="none")
         out[i:i + batch] = nll.view(-1, *X.shape[1:]).cpu().numpy()
     return out
+
+
+@torch.no_grad()
+def field_probs(model: Nadi, X: np.ndarray, field: str, ids: list, batch: int = 64) -> np.ndarray:
+    """Peluang tiap nilai kandidat `ids` untuk `field` di setiap klaim: [n, klaim, len(ids)]."""
+    device = next(model.parameters()).device
+    col = FIELDS.index(field)
+    out = []
+    for i in range(0, len(X), batch):
+        tokens = torch.from_numpy(X[i:i + batch]).flatten(1).to(device)
+        logits = model(tokens).view(len(tokens), X.shape[1], len(FIELDS), -1)[:, :, col, ids]
+        out.append(F.softmax(logits, dim=-1).cpu().numpy())
+    return np.concatenate(out)
+
+
+def rule_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Aturan pasti untuk pola yang tidak butuh model. `df` urut per peserta dan tanggal."""
+    prev = df.groupby("patient")[["discharge", "hospital", "dx", "service"]].shift()
+    gap = (df.admit - prev.discharge).dt.days
+    return pd.DataFrame({
+        # rawat inap lanjutan di RS dan diagnosis yang sama, paling lama sehari setelah pulang
+        "split_episode": (df.service == "RI") & (prev.service == "RI") & (gap <= 1)
+                         & (df.hospital == prev.hospital) & (df.dx == prev.dx),
+        "duplicate": df.duplicated(["patient", "admit", "discharge", "hospital", "cbg", "dx", "severity"]),
+    })
