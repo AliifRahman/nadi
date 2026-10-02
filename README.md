@@ -1,66 +1,71 @@
 # SmartGuard JKN
 
-Prioritas verifikasi klaim rawat inap JKN dengan **NADI**, model bahasa kecil yang
-belajar urutan klaim yang wajar lalu menandai klaim yang janggal.
+Prioritas review klaim rawat inap JKN pakai **NADI**, language model kecil yang
+di-training di sequence klaim peserta. Klaim yang value-nya tidak sesuai prediksi model
+naik ke atas queue verifikator.
 
-Entri BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan
-(upcoding, pemecahan episode, klaim berulang).
+Entri BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan.
+Fokus: upcoding, pemecahan episode, repeat billing.
 
 ## Cara kerja
 
-1. Tiap klaim RS diubah menjadi 12 token: jenis kelamin dan usia, jarak hari dari klaim
-   sebelumnya, faskes sama/beda, jenis layanan, kelas RS, diagnosis utama, kelompok
-   INA-CBG, lama rawat, tiga diagnosis sekunder, dan tingkat keparahan.
-2. Model bergaya GPT (4 juta parameter, dilatih dari nol) belajar menebak token
-   berikutnya dari riwayat klaim peserta. Tidak butuh label fraud.
-3. Peluang yang diberikan model pada nilai yang ditagihkan menjadi skor. Keparahan III
-   dengan peluang 3,8% berarti janggal dan layak diperiksa lebih dulu.
-4. Pola yang sudah jelas (episode dipecah, klaim ganda) ditangkap aturan biasa.
+1. Tiap klaim FKRTL dijadikan 12 token: sex + age group, gap hari dari klaim sebelumnya,
+   faskes sama/beda, RJTL/RITL, kelas RS, diagnosis primer, kode INA-CBG, LOS,
+   tiga diagnosis sekunder, severity level.
+2. Model GPT-style (4M parameter, training from scratch) belajar prediksi token
+   berikutnya dari riwayat klaim peserta. Self-supervised, jadi tidak butuh label fraud.
+3. Probabilitas yang diberikan model ke value yang diklaim dipakai sebagai score.
+   Contoh: severity III dengan probabilitas 3,8% masuk prioritas review.
+4. Pattern yang sudah jelas (pemecahan episode, repeat billing) cukup pakai rule.
 
-Skor adalah prioritas periksa, bukan kesimpulan. Keputusan tetap pada verifikator.
+Score ini prioritas review, bukan keputusan. Keputusan tetap di verifikator.
 
-## Hasil uji
+## Hasil evaluasi
 
-Data Sampel BPJS Kesehatan Edisi 2025 (reguler): 1.699.219 klaim RS dari 306.710 peserta.
-10% peserta disisihkan untuk uji (171.510 klaim, 19.541 rawat inap). Karena data tidak
-punya label fraud, klaim uji disisipi anomali buatan lalu dihitung berapa yang tertangkap
-di 5% klaim paling janggal.
+Data Sampel BPJS Kesehatan Edisi 2025 (reguler): 1.699.219 klaim FKRTL, 306.710 peserta.
+Split per peserta, 10% jadi test set (171.510 klaim, 19.541 rawat inap).
 
-| Uji | NADI | Pembanding (tabel CBG x jumlah dx sekunder) |
+Data sampel tidak punya label fraud. Jadi evaluasinya pakai injected anomaly: klaim di
+test set dimodifikasi dengan pattern yang diketahui, lalu dihitung recall di top 5% klaim
+dengan score tertinggi.
+
+| Test | NADI | Baseline (tabel CBG x jumlah dx sekunder) |
 |---|---|---|
-| Menebak tingkat keparahan rawat inap | 96,2% | 84,1% |
-| Keparahan dinaikkan I ke II tanpa perubahan lain | 96% tertangkap | 70% |
-| Upcoding realistis: tambah 1 dx sekunder + naik I ke II | 49% tertangkap | 25% |
-| Episode rawat inap dipecah dua | 98% tertangkap | aturan pasti: 100%, 7 klaim asli ikut tertanda |
+| Accuracy prediksi severity rawat inap | 96,2% | 84,1% |
+| Severity dinaikkan I ke II, field lain tetap | recall 96% | 70% |
+| Upcoding realistis: +1 dx sekunder, severity I ke II | recall 49% | 25% |
+| Episode rawat inap dipecah jadi dua klaim | recall 98% | rule: recall 100%, 7 false positive |
 
-Pada klaim uji asli, 373 klaim rawat inap ditagihkan di atas keparahan yang diperkirakan
-model, dengan selisih kasar Rp1,25 miliar terhadap tarif lazim.
+Di test set asli (tanpa injection) ada 373 klaim rawat inap dengan severity di atas
+prediksi model. Selisihnya terhadap tarif median sekitar Rp1,25 miliar (estimasi kasar).
 
-Keterbatasan: upcoding yang rapi di tingkat kode baru separuhnya tertangkap, karena
-buktinya ada di rekam medis, bukan di klaim. Angka rupiah belum memakai bobot sampel,
-jadi tidak boleh diekstrapolasi ke nasional.
+Limitasi:
 
-## Menjalankan
+- Upcoding yang konsisten di level coding baru separuhnya terdeteksi. Bukti klinisnya
+  ada di rekam medis, bukan di data klaim.
+- Angka rupiah belum pakai sampling weight, jadi belum bisa diekstrapolasi ke nasional.
+
+## Setup
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python prepare.py "/path/ke/Data Sampel Reguler Edisi 2025/data"
-.venv/bin/python train.py       # sekitar 25 menit di MacBook M3 8 GB
-.venv/bin/python evaluate.py    # hasil uji + artifacts/scored.parquet
+.venv/bin/python train.py       # +- 25 menit di MacBook M3 8 GB
+.venv/bin/python evaluate.py    # hasil evaluasi + artifacts/scored.parquet
 .venv/bin/uvicorn app:app       # buka http://localhost:8000
 ```
 
-`python test_nadi.py` menjalankan cek cepat tokenisasi dan aturan.
+`python test_nadi.py` untuk quick check tokenizer dan rule.
 
-Data Sampel BPJS Kesehatan dan turunannya tidak disertakan di repo ini. ID peserta dan
-faskes diacak ulang saat pembersihan.
+Data sampel BPJS Kesehatan dan turunannya tidak ikut di repo. ID peserta dan faskes
+di-shuffle ulang waktu data cleaning.
 
-## Isi repo
+## Struktur
 
 | File | Isi |
 |---|---|
-| `prepare.py` | Pembersihan data sampel menjadi satu tabel klaim |
-| `nadi.py` | Tokenisasi, model, penilaian, aturan pasti |
-| `train.py` | Pelatihan |
-| `evaluate.py` | Uji dengan anomali sisipan |
-| `app.py`, `web/index.html` | Antrean prioritas dan simulator klaim |
+| `prepare.py` | Data cleaning, dari `.dta` ke satu tabel klaim |
+| `nadi.py` | Tokenizer, model, scoring, rule-based check |
+| `train.py` | Training |
+| `evaluate.py` | Evaluasi dengan injected anomaly |
+| `app.py`, `web/index.html` | Priority queue dan simulator klaim |
