@@ -35,6 +35,18 @@ def demo() -> None:
     assert X.shape == (2, nadi.MAX_VISITS, len(nadi.FIELDS))
     assert chunk.tolist() == [0, 0, 0, 1] and pos.tolist() == [0, 1, 2, 0]
     assert (X[1, 1:] == nadi.PAD).all()
+
+    # facility 1 codes severity II three times as often as its peers
+    n = nadi.MIN_FACILITY_CLAIMS
+    stays = pd.DataFrame({
+        "hospital": [h for h in range(1, 11) for _ in range(n)],
+        "cbg": "K-4-17", "hosp_class": 3,
+        "severity": ["II"] * 18 + ["I"] * 12 + (["II"] * 6 + ["I"] * 24) * 9,
+    })
+    index = nadi.facility_index(stays, nadi.peer_expected(stays))
+    assert index.observed[1] == 18 and abs(index.expected[1] - 7.2) < 1e-9
+    assert index.z.idxmax() == 1 and index.z[1] > 3 > index.z[2]
+    assert nadi.facility_index(stays.iloc[1:], nadi.peer_expected(stays).iloc[1:]).index.tolist() == list(range(2, 11))
     print("ok")
 
 

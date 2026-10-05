@@ -15,6 +15,7 @@ import torch.nn.functional as F
 FIELDS = ["demo", "gap", "fac", "svc", "cls", "dx", "cbg", "los", "sec1", "sec2", "sec3", "sev"]
 MAX_VISITS = 20  # claims per sequence chunk
 MIN_COUNT = 5    # rarer values are mapped to "?" (unknown)
+MIN_FACILITY_CLAIMS = 30  # inpatient claims a facility needs before it is compared with peers
 PAD = 0
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -158,15 +159,27 @@ def load(path, device: str = DEVICE):
 
 # ------------------------------------------------------------------- scoring
 
+def _batches(X: np.ndarray, batch: int):
+    """Batches of similar-length sequences, with the trailing padding cut off.
+
+    The model is causal, so padding after the last claim never changes the outputs before it.
+    """
+    n_visits = (X[:, :, 0] != PAD).sum(axis=1)
+    order = np.argsort(n_visits, kind="stable")
+    for i in range(0, len(order), batch):
+        rows = order[i:i + batch]
+        yield rows, X[rows, :n_visits[rows[-1]]]
+
+
 @torch.no_grad()
 def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
-    """Surprisal (negative log-likelihood) of every token; same shape as X."""
+    """Surprisal (negative log-likelihood) of every token; same shape as X, 0 on padding."""
     device = next(model.parameters()).device
     out = np.zeros(X.shape, dtype=np.float32)
-    for i in range(0, len(X), batch):
-        tokens = torch.from_numpy(X[i:i + batch]).flatten(1).to(device)
+    for rows, part in _batches(X, batch):
+        tokens = torch.from_numpy(part).flatten(1).to(device)
         nll = F.cross_entropy(model(tokens).transpose(1, 2), tokens, reduction="none")
-        out[i:i + batch] = nll.view(-1, *X.shape[1:]).cpu().numpy()
+        out[rows, :part.shape[1]] = nll.view(part.shape).cpu().numpy()
     return out
 
 
@@ -175,12 +188,12 @@ def field_probs(model: Nadi, X: np.ndarray, field: str, ids: list, batch: int = 
     """Probability of each candidate token in `ids` for `field`, per claim: [n, claims, len(ids)]."""
     device = next(model.parameters()).device
     col = FIELDS.index(field)
-    out = []
-    for i in range(0, len(X), batch):
-        tokens = torch.from_numpy(X[i:i + batch]).flatten(1).to(device)
-        logits = model(tokens).view(len(tokens), X.shape[1], len(FIELDS), -1)[:, :, col, ids]
-        out.append(F.softmax(logits, dim=-1).cpu().numpy())
-    return np.concatenate(out)
+    out = np.zeros((*X.shape[:2], len(ids)), dtype=np.float32)
+    for rows, part in _batches(X, batch):
+        tokens = torch.from_numpy(part).flatten(1).to(device)
+        logits = model(tokens).view(*part.shape, -1)[:, :, col, ids]
+        out[rows, :part.shape[1]] = F.softmax(logits, dim=-1).cpu().numpy()
+    return out
 
 
 def rule_flags(df: pd.DataFrame) -> pd.DataFrame:
@@ -193,3 +206,25 @@ def rule_flags(df: pd.DataFrame) -> pd.DataFrame:
                          & (df.hospital == prev.hospital) & (df.dx == prev.dx),
         "duplicate": df.duplicated(["patient", "admit", "discharge", "hospital", "cbg", "dx", "severity"]),
     })
+
+
+def peer_expected(inpatient: pd.DataFrame) -> pd.Series:
+    """Share of claims above severity I among peer claims: same CBG, same hospital class."""
+    return (inpatient.severity != "I").groupby([inpatient.cbg, inpatient.hosp_class]).transform("mean")
+
+
+def facility_index(inpatient: pd.DataFrame, expected: pd.Series) -> pd.DataFrame:
+    """Observed vs expected number of claims above severity I, per facility.
+
+    A frequency table is enough here: at facility level the model's own expectation
+    was no more stable between half-years than `peer_expected`.
+    """
+    high = inpatient.severity != "I"
+    out = pd.DataFrame({"n": 1, "observed": high, "expected": expected, "var": expected * (1 - expected)})
+    out = out.groupby(inpatient.hospital).sum()
+    out = out[out.n >= MIN_FACILITY_CLAIMS]
+    z = ((out.observed - out.expected) / np.sqrt(out["var"])).fillna(0)
+    # facilities differ by more than chance, so the limits are widened by the
+    # winsorised spread of z (overdispersed funnel plot, Spiegelhalter 2005)
+    spread = np.sqrt(np.mean(np.clip(z, *np.quantile(z, [0.1, 0.9])) ** 2))
+    return out.assign(z=z / spread, spread=spread)
