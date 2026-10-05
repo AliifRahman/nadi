@@ -276,7 +276,7 @@ async function loadFacility(hospital) {
       f.claims.length ? h("ol", {}, ...f.claims.map(v => h("li", {},
         h("button", { onclick: () => loadClaim(v.row), title: `${v.dx_name} · ${v.cbg_name}` },
           h("span", {}, `${v.admit} · peserta #${v.patient} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
-          h("span", {}, ...flags(v), v.potential > 0 ? h("span", { className: "flag" }, `⚠ severity ${v.severity} → ${v.expected}`) : null)))))
+          h("span", {}, ...flags(v), v.potential > 0 ? h("span", { className: "flag" }, `⚠ severity ${v.severity} → ${v.expected}`) : null, decided(v))))))
         : h("p", { className: "muted" }, "Tidak ada klaim yang kena rule atau di atas prediksi model.")),
     h("p", { className: "muted" }, "Rasio ini pembanding antar faskes, bukan bukti. Case-mix yang tidak tertangkap CBG dan kelas RS bisa menjelaskan selisihnya."));
 }
