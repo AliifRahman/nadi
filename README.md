@@ -2,7 +2,8 @@
 
 Prioritas review klaim rawat inap JKN pakai **NADI**, language model kecil yang
 di-training di sequence klaim peserta. Klaim yang value-nya tidak sesuai prediksi model
-naik ke atas queue verifikator.
+naik ke atas queue verifikator. Di atasnya ada profil per faskes, keputusan verifikator
+dengan audit log, dan output FHIR R4.
 
 Entri BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan.
 Fokus: upcoding, pemecahan episode, repeat billing.
@@ -17,6 +18,11 @@ Fokus: upcoding, pemecahan episode, repeat billing.
 3. Probabilitas yang diberikan model ke value yang diklaim dipakai sebagai score.
    Contoh: severity III dengan probabilitas 3,8% masuk prioritas review.
 4. Pattern yang sudah jelas (pemecahan episode, repeat billing) cukup pakai rule.
+5. Level faskes: share klaim severity II/III tiap faskes dibandingkan dengan faskes
+   sejenis (CBG dan kelas RS sama), ditampilkan sebagai funnel plot. Ini juga cukup
+   pakai tabel frekuensi, bukan model (lihat limitasi).
+6. Verifikator mencatat keputusan (layak / pending / tidak layak) per klaim. Keputusan
+   masuk audit log, dan nantinya jadi label yang sekarang belum ada.
 
 Score ini prioritas review, bukan keputusan. Keputusan tetap di verifikator.
 
@@ -37,6 +43,11 @@ dengan score tertinggi.
 | Episode rawat inap dipecah jadi dua klaim | recall 98% | rule: recall 100%, 7 false positive |
 | LOS diperpanjang 3-5 hari | recall 46% | 44% (tabel CBG x severity) |
 
+Level faskes (seluruh sample): 1.906 faskes punya minimal 30 klaim rawat inap, 33 di
+antaranya di atas batas 3σ. Indeksnya stabil: korelasi Spearman antara semester 1 dan
+semester 2 adalah 0,67 (1.120 faskes yang punya cukup klaim di kedua semester). Jadi
+yang terukur adalah pola faskes, bukan noise.
+
 Di test set asli (tanpa injection) ada 373 klaim rawat inap dengan severity di atas
 prediksi model. Selisihnya terhadap tarif median sekitar Rp1,25 miliar, atau 1,07% dari
 biaya rawat inap. Dengan sampling weight, skalanya sekitar Rp1,0 triliun per tahun
@@ -45,6 +56,9 @@ biaya rawat inap. Dengan sampling weight, skalanya sekitar Rp1,0 triliun per tah
 Rule di seluruh sample: pemecahan episode kena 89 klaim (weighted 5.892 klaim, sekitar
 Rp36,5 miliar per tahun), repeat billing 26 klaim.
 
+Web app menampilkan seluruh sample, bukan hanya test set. Score in-sample dan held-out
+hampir sama (accuracy severity 96,5% vs 96,2%). Semua angka di tabel tetap dari test set.
+
 Limitasi:
 
 - Upcoding yang konsisten di level coding baru separuhnya terdeteksi. Bukti klinisnya
@@ -52,6 +66,45 @@ Limitasi:
 - Untuk prolonged LOS, NADI hampir sama dengan baseline (46% vs 44%).
 - Angka rupiah adalah gap terhadap tarif median berdasarkan prediksi model, bukan
   temuan audit.
+- Di level faskes NADI tidak lebih baik dari tabel. Expected severity dari NADI (lewat
+  sampling dx sekunder) dicoba dan hasilnya tidak lebih stabil antar-semester daripada
+  tabel CBG x kelas RS (Spearman 0,56 vs 0,63 di percobaan yang sama), jadi yang dipakai
+  tabel.
+- Rasio faskes adalah pembanding, bukan bukti. Case-mix yang tidak tertangkap CBG dan
+  kelas RS bisa menjelaskan selisihnya.
+- Data sampel tidak punya kolom ID faskes. ID faskes diturunkan dari prefix ID kunjungan.
+  Ini inferensi, bukan dokumentasi resmi.
+
+## Keputusan verifikator dan audit log
+
+Keputusan disimpan di `artifacts/reviews.jsonl`, append-only. Tiap baris menyimpan hash
+SHA-256 dari baris sebelumnya, jadi baris lama yang diubah langsung kelihatan (status
+hash chain tampil di footer app). Yang ikut dicatat: waktu, nama verifikator, keputusan,
+catatan, dan probabilitas dari model saat keputusan dibuat.
+
+Prototype ini belum punya login, jadi nama verifikator masih diketik manual. Hash chain
+juga tidak mendeteksi baris terakhir yang dihapus.
+
+## Output FHIR
+
+`GET /api/claim/{row}/fhir` mengembalikan Bundle FHIR R4:
+
+- `RiskAssessment`: probabilitas tiap severity level, dengan security label `AIAST`.
+- `Provenance`: NADI sebagai author, verifikator sebagai verifier (kalau sudah ada
+  keputusan), klaim sebagai source.
+- `Device`: identitas model. Version diambil dari hash file checkpoint.
+
+Provenance dan Device mengikuti profil AI-Provenance dan AI-Device dari implementation
+guide HL7 [AI Transparency on FHIR](https://build.fhir.org/ig/HL7/aitransparency-ig/)
+(STU1 ballot, basis R4). Bundle sudah dicek dengan HL7 FHIR Validator terhadap R4 dan
+IG tersebut: 0 error.
+
+Per 5 Oktober 2026, dokumentasi SATUSEHAT mencantumkan `RiskAssessment`, `Claim`, dan
+`ClaimResponse`, tetapi belum `Provenance` dan `Device`. Jadi score-nya sudah bisa
+dibawa SATUSEHAT, sedangkan catatan siapa yang menghasilkan dan siapa yang memverifikasi
+belum.
+
+Identifier di Bundle masih placeholder. Di produksi isinya nomor SEP dan IHS patient ID.
 
 ## Setup
 
@@ -59,11 +112,11 @@ Limitasi:
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python prepare.py "/path/ke/Data Sampel Reguler Edisi 2025/data"
 .venv/bin/python train.py       # +- 25 menit di MacBook M3 8 GB
-.venv/bin/python evaluate.py    # hasil evaluasi + artifacts/scored.parquet
+.venv/bin/python evaluate.py    # +- 5 menit, hasil evaluasi + artifacts/scored.parquet
 .venv/bin/uvicorn app:app       # buka http://localhost:8000
 ```
 
-`python test_nadi.py` untuk quick check tokenizer dan rule.
+`python test_nadi.py` untuk quick check tokenizer, rule, dan indeks faskes.
 
 Data sampel BPJS Kesehatan dan turunannya tidak ikut di repo. ID peserta dan faskes
 di-shuffle ulang waktu data cleaning.
@@ -73,7 +126,7 @@ di-shuffle ulang waktu data cleaning.
 | File | Isi |
 |---|---|
 | `prepare.py` | Data cleaning, dari `.dta` ke satu tabel klaim |
-| `nadi.py` | Tokenizer, model, scoring, rule-based check |
+| `nadi.py` | Tokenizer, model, scoring, rule-based check, indeks faskes |
 | `train.py` | Training |
-| `evaluate.py` | Evaluasi dengan injected anomaly |
-| `app.py`, `web/index.html` | Priority queue dan simulator klaim |
+| `evaluate.py` | Evaluasi dengan injected anomaly, score untuk seluruh sample |
+| `app.py`, `web/index.html` | Priority queue, profil faskes, simulator klaim, keputusan verifikator, output FHIR |
