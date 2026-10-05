@@ -1,11 +1,14 @@
-"""SmartGuard JKN web app: priority queue and claim simulator.
+"""SmartGuard JKN web app: priority queue, facility profile, claim simulator and reviewer decisions.
 
 Run: uvicorn app:app
 Needs artifacts/nadi.pt (train.py) and artifacts/scored.parquet (evaluate.py).
 """
+import hashlib
 import json
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -31,6 +34,13 @@ LABELS = {  # shown in the UI
 model, vocab = nadi.load("artifacts/nadi.pt", device="cpu")
 claims = pd.read_parquet("artifacts/scored.parquet")
 claims["priority"] = claims.potential * (1 - claims.p_claimed)
+to_review = (claims.potential > 0) | claims.split_episode | claims.duplicate
+inpatient = claims[claims.service == "RI"]
+inpatient = inpatient.assign(peer=nadi.peer_expected(inpatient))
+facilities = nadi.facility_index(inpatient, inpatient.peer).join(pd.DataFrame({
+    "hosp_class": claims.groupby("hospital").hosp_class.last(),
+    "review": to_review.groupby(claims.hospital).sum(),
+}))
 NAMES = json.loads(Path("data/names.json").read_text())
 SEV_IDS = [nadi.field_ids(vocab, "sev")[level] for level in LEVELS]
 OPTIONS = {
@@ -39,7 +49,26 @@ OPTIONS = {
     "sec": [[code, NAMES["dx"].get(code, "")] for code in sorted(nadi.field_ids(vocab, "sec1")) if code != "-"],
 }
 
+REVIEWS = Path("artifacts/reviews.jsonl")  # append-only; every line carries the hash of the line before it
+write_lock = threading.Lock()
+MODEL_VERSION = hashlib.sha256(Path("artifacts/nadi.pt").read_bytes()).hexdigest()[:12]
+# AI Transparency on FHIR (hl7.fhir.uv.aitransparency, STU1 ballot, FHIR R4)
+AI_IG = "http://hl7.org/fhir/uv/aitransparency"
+AIAST = {"system": "http://terminology.hl7.org/CodeSystem/v3-ObservationValue", "code": "AIAST",
+         "display": "Artificial Intelligence asserted"}
+AI_TYPE = {"coding": [{"system": AI_IG + "/CodeSystem/AIdeviceTypeCS", "code": "Artificial-Intelligence"}]}
+# the sample data has no real identifiers; production would carry the SEP number and the IHS patient id
+BASE = "https://github.com/AliifRahman/nadi/fhir/"
+
 app = FastAPI(title="SmartGuard JKN")
+
+
+class Review(BaseModel):
+    """A reviewer's decision on one claim."""
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["layak", "pending", "tidak_layak"]
+    reviewer: str = Field(min_length=1, max_length=60)
+    note: str = Field("", max_length=500)
 
 
 class Changes(BaseModel):
@@ -58,11 +87,27 @@ def name_of(field: str, value: str) -> str:
     return NAMES[kind].get(value, "") if kind else ""
 
 
-def history(row: int) -> pd.DataFrame:
-    """The patient's claims that share a sequence chunk with claim `row`."""
+def read_log():
+    """The review log: (entries, hash of the last line, whether the hash chain is intact)."""
+    # shortcut: re-read on every request, and the chain shows edits but not a cut-off tail;
+    # move to a database and anchor the last hash elsewhere once this is more than a demo
+    entries, last, intact = [], "", True
+    for line in REVIEWS.read_text().splitlines() if REVIEWS.exists() else []:
+        entries.append(json.loads(line))
+        intact &= entries[-1]["prev"] == last
+        last = hashlib.sha256(line.encode()).hexdigest()
+    return entries, last, intact
+
+
+def claim_at(row: int) -> pd.Series:
     if not 0 <= row < len(claims):
         raise HTTPException(404, "claim not found")
-    rows = np.flatnonzero(claims.patient.to_numpy() == claims.patient[row])
+    return claims.iloc[row]
+
+
+def history(row: int) -> pd.DataFrame:
+    """The patient's claims that share a sequence chunk with claim `row`."""
+    rows = np.flatnonzero(claims.patient.to_numpy() == claim_at(row).patient)
     chunk = (rows - rows[0]) // nadi.MAX_VISITS
     return claims.iloc[rows[chunk == chunk[rows == row][0]]]
 
@@ -100,7 +145,8 @@ def as_records(df: pd.DataFrame) -> list:
         admit=df.admit.dt.strftime("%Y-%m-%d"), row=df.index,
         dx_name=df.dx.map(NAMES["dx"]).fillna(""), cbg_name=df.cbg.map(NAMES["cbg"]).fillna(""),
     )
-    return out.to_dict("records")
+    latest = {entry["row"]: entry["decision"] for entry in read_log()[0]}
+    return [{**record, "decision": latest.get(record["row"])} for record in out.to_dict("records")]
 
 
 @app.get("/")
@@ -111,12 +157,18 @@ def index():
 @app.get("/api/summary")
 def summary():
     above = claims[claims.potential > 0]
+    entries, _, intact = read_log()
     return {
+        "reviewed": len({entry["row"] for entry in entries}),
+        "log_entries": len(entries),
+        "log_intact": intact,
         "claims": len(claims),
         "inpatient": int((claims.service == "RI").sum()),
         "above": len(above),
         "potential": int(above.potential.sum()),
         "rules": int((claims.split_episode | claims.duplicate).sum()),
+        "facilities": len(facilities),
+        "outliers": int((facilities.z > 3).sum()),
     }
 
 
@@ -130,11 +182,98 @@ def queue(kind: str = "model", limit: int = 50):
     return as_records(picked)
 
 
+@app.get("/api/facilities")
+def facility_list():
+    return facilities.reset_index().to_dict("records")
+
+
+@app.get("/api/facility/{hospital}")
+def facility(hospital: int):
+    if hospital not in facilities.index:
+        raise HTTPException(404, "facility not found")
+    mine = inpatient[inpatient.hospital == hospital]
+    by_cbg = pd.DataFrame({"n": 1, "observed": mine.severity != "I", "expected": mine.peer}).groupby(mine.cbg).sum()
+    by_cbg = by_cbg.assign(excess=by_cbg.observed - by_cbg.expected).nlargest(6, "excess").reset_index()
+    by_cbg["name"] = by_cbg.cbg.map(NAMES["cbg"]).fillna("")
+    flagged = claims[(claims.hospital == hospital) & to_review]
+    return {"hospital": hospital, **facilities.loc[hospital].to_dict(),
+            "cbg": by_cbg.to_dict("records"), "claims": as_records(flagged.nlargest(20, "priority"))}
+
+
 @app.get("/api/claim/{row}")
 def claim(row: int):
-    return {"visits": as_records(history(row)), "options": OPTIONS, **assess(row, {})}
+    reviews = [entry for entry in read_log()[0] if entry["row"] == row]
+    return {"visits": as_records(history(row)), "options": OPTIONS, "reviews": reviews, **assess(row, {})}
 
 
 @app.post("/api/claim/{row}/simulate")
 def simulate(row: int, changes: Changes):
     return assess(row, changes.model_dump(exclude_none=True))
+
+
+@app.post("/api/claim/{row}/review")
+def review(row: int, body: Review):
+    c = claim_at(row)
+    with write_lock:
+        entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "row": row,
+                 "severity": c.severity, "expected": c.expected, "p_claimed": round(float(c.p_claimed), 4),
+                 **body.model_dump(), "prev": read_log()[1]}
+        with REVIEWS.open("a") as log:
+            log.write(json.dumps(entry) + "\n")
+    return entry
+
+
+@app.get("/api/claim/{row}/fhir")
+def fhir(row: int):
+    """The assessment as a FHIR R4 Bundle: RiskAssessment, plus who produced and who verified it."""
+    c = claim_at(row)
+    if c.service != "RI":
+        raise HTTPException(422, "only inpatient claims have a severity assessment")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    reviews = [entry for entry in read_log()[0] if entry["row"] == row]
+    claim_ref = {"identifier": {"system": BASE + "klaim", "value": str(row)},
+                 "display": f"Klaim {c.cbg}-{c.severity}, masuk {c.admit:%Y-%m-%d}"}
+    risk = {
+        "resourceType": "RiskAssessment", "id": f"nadi-{row}",
+        "meta": {"security": [AIAST]},
+        "status": "final",
+        "code": {"text": "Prioritas review klaim rawat inap JKN"},
+        "method": {"text": "NADI: probabilitas tiap field klaim, diprediksi dari riwayat klaim peserta"},
+        "subject": {"identifier": {"system": BASE + "peserta", "value": str(c.patient)}},
+        "occurrenceDateTime": now,
+        "performer": {"reference": "Device/nadi"},
+        "basis": [claim_ref],
+        "prediction": [
+            {"outcome": {"text": f"Severity level {s['level']}"}, "probabilityDecimal": round(s["p"], 4),
+             **({"rationale": "Severity yang diklaim"} if s["claimed"] else {})}
+            for s in assess(row, {})["severity"]
+        ],
+        "note": [{"text": "Prioritas review, bukan keputusan. Keputusan tetap di verifikator."},
+                 *({"time": r["time"], "authorString": r["reviewer"],
+                    "text": f"Keputusan verifikator: {r['decision']}. {r['note']}".strip()} for r in reviews)],
+    }
+    # the reviewer who made the latest decision, if any
+    verifier = [{"resourceType": "Practitioner", "id": f"verifikator-{row}", "name": [{"text": r["reviewer"]}]}
+                for r in reviews[-1:]]
+    agent_type = lambda code: {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/provenance-participant-type", "code": code}]}
+    provenance = {
+        "resourceType": "Provenance", "id": f"nadi-{row}",
+        "meta": {"profile": [AI_IG + "/StructureDefinition/AI-Provenance"]},
+        "target": [{"reference": f"RiskAssessment/nadi-{row}"}],
+        "recorded": now,
+        "reason": [{"coding": [AIAST]}],
+        "agent": [{"type": agent_type("author"), "role": [AI_TYPE], "who": {"reference": "Device/nadi"}},
+                  *({"type": agent_type("verifier"), "who": {"reference": f"Practitioner/{v['id']}"}} for v in verifier)],
+        "entity": [{"role": "source", "what": claim_ref}],
+    }
+    device = {
+        "resourceType": "Device", "id": "nadi",
+        "meta": {"profile": [AI_IG + "/StructureDefinition/AI-Device"]},
+        "type": AI_TYPE,
+        "deviceName": [{"name": "NADI", "type": "model-name"}],
+        "version": [{"value": MODEL_VERSION}],
+        "manufacturer": "SmartGuard JKN",
+    }
+    return {"resourceType": "Bundle", "type": "collection", "entry": [
+        {"fullUrl": f"{BASE}{r['resourceType']}/{r['id']}", "resource": r}
+        for r in (risk, provenance, device, *verifier)]}
