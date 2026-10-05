@@ -2,7 +2,7 @@
 
 The sample data has no fraud labels, so known patterns are injected into test
 claims and we measure how many of them the model ranks at the top.
-Output: a summary on stdout and artifacts/scored.parquet for the app.
+Output: a summary on stdout and artifacts/scored.parquet (every claim) for the app.
 """
 import numpy as np
 import pandas as pd
@@ -73,8 +73,9 @@ def split_episodes(df: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
     return out.sort_values(["patient", "admit", "discharge"], kind="stable").reset_index(drop=True)
 
 
-def save_scored(df, train, inpatient, nll, p_sev) -> None:
-    """Original test claims with their scores, for the queue and simulator in the app."""
+def save_scored(df, train, p_claimed, p_sev) -> None:
+    """Every claim with its scores, for the app. The summary printed here uses held-out patients only."""
+    inpatient = (df.service == "RI").to_numpy()
     claimed = df.severity.map({"0": 0, "I": 1, "II": 2, "III": 3}).to_numpy()
     expected = 1 + p_sev.argmax(axis=1)
     typical = train.groupby(["cbg", "hosp_class", "severity"]).cost.agg(["median", "size"])
@@ -84,35 +85,56 @@ def save_scored(df, train, inpatient, nll, p_sev) -> None:
 
     scored = df.join(nadi.rule_flags(df))
     scored[["p_I", "p_II", "p_III"]] = p_sev
-    scored["p_claimed"] = np.exp(-nll.sev.to_numpy())
+    scored["p_claimed"] = p_claimed
     scored["expected"] = LEVELS[expected - 1]
     # gap to the typical tariff at the expected severity; rough, only used for ranking
     scored["potential"] = np.where(inpatient & (claimed > expected), saving, 0).astype("int64")
     scored.to_parquet("artifacts/scored.parquet", index=False)
 
-    above, ri = scored[scored.potential > 0], scored[inpatient]
+    right = (scored.expected == scored.severity)[inpatient]
+    print(f"\nseverity accuracy on every inpatient claim: in-sample {right[~scored.test].mean():.1%}, "
+          f"held-out {right[scored.test].mean():.1%}")
+    held_out = scored[scored.test]
+    above, ri = held_out[held_out.potential > 0], held_out[held_out.service == "RI"]
     weighted = (above.potential * above.weight).sum()
-    print(f"\nsaved artifacts/scored.parquet | inpatient claims above expected severity: {len(above):,}, "
+    print(f"saved artifacts/scored.parquet | held-out inpatient claims above expected severity: {len(above):,}, "
           f"potential gap Rp{above.potential.sum() / 1e9:.2f}B (rough)")
     # sample weights scale claims to the JKN population; the test set holds TEST_SHARE of patients
     print(f"= {weighted / (ri.cost * ri.weight).sum():.2%} of inpatient cost, "
           f"or about Rp{weighted / TEST_SHARE / 1e12:.1f}T per year at national scale (rough)")
+    # rules need no training, so count their hits on the whole sample
+    for name in ("split_episode", "duplicate"):
+        found = scored[scored[name]]
+        print(f"rule {name}: {len(found)} claims in the full sample, "
+              f"weighted {found.weight.sum():,.0f} claims / Rp{(found.cost * found.weight).sum() / 1e9:.1f}B per year")
+
+
+def facility_report(inpatient: pd.DataFrame) -> None:
+    """Is the facility index a stable trait, or noise? Compare the two halves of the year."""
+    expected = nadi.peer_expected(inpatient)
+    index = nadi.facility_index(inpatient, expected)
+    first = (inpatient.admit.dt.month <= 6).to_numpy()
+    halves = pd.concat([nadi.facility_index(inpatient[m], expected[m]).z for m in (first, ~first)], axis=1, join="inner")
+    print("\n[5] facility level: claims above severity I vs peers with the same CBG and hospital class")
+    print(f"  {len(index):,} facilities with {nadi.MIN_FACILITY_CLAIMS}+ inpatient claims, "
+          f"{(index.z > 3).sum()} above the 3 sigma limit")
+    print(f"  first vs second half of the year: Spearman {halves.rank().corr().iloc[0, 1]:.2f} "
+          f"on {len(halves):,} facilities")
 
 
 def main() -> None:
     model, vocab = nadi.load("artifacts/nadi.pt")
-    df = pd.read_parquet("data/claims.parquet")
-    feats = nadi.features(df)
-    is_test = nadi.is_test(df.patient)
-    train, train_ri = df[~is_test], feats[~is_test & (feats.svc == "RI")]
-    df, feats = df[is_test].reset_index(drop=True), feats[is_test].reset_index(drop=True)
+    full = pd.read_parquet("data/claims.parquet")
+    full_feats = nadi.features(full)
+    is_test = nadi.is_test(full.patient)
+    train, train_ri = full[~is_test], full_feats[~is_test & (full_feats.svc == "RI")]
+    df, feats = full[is_test].reset_index(drop=True), full_feats[is_test].reset_index(drop=True)
     patient = df.patient.to_numpy()
     inpatient = (feats.svc == "RI").to_numpy()
     sev_table = baseline(with_nsec(train_ri), ["cbg", "nsec"], "sev")
     los_table = baseline(train_ri, ["cbg", "sev"], "los")
 
     X, chunk, pos = nadi.to_sequences(nadi.encode(feats, vocab), patient)
-    nll = pd.DataFrame(nadi.surprise(model, X)[chunk, pos], columns=nadi.FIELDS)
     sev_ids = [nadi.field_ids(vocab, "sev")[level] for level in LEVELS]
     p_sev = nadi.field_probs(model, X, "sev", sev_ids)[chunk, pos]
 
@@ -172,14 +194,12 @@ def main() -> None:
     report("NADI, LOS surprisal", new.los.to_numpy()[inpatient], label[inpatient])
     report("baseline table (CBG x severity)", table_surprise(los_table, changed[inpatient]), label[inpatient])
 
-    save_scored(df, train, inpatient, nll, p_sev)
+    facility_report(full[full.service == "RI"])
 
-    # rules need no training, so count their hits on the whole sample
-    everything = pd.concat([train, df]).sort_values(["patient", "admit", "discharge"])
-    for name, hit in nadi.rule_flags(everything).items():
-        found = everything[hit]
-        print(f"rule {name}: {len(found)} claims in the full sample, "
-              f"weighted {found.weight.sum():,.0f} claims / Rp{(found.cost * found.weight).sum() / 1e9:.1f}B per year")
+    # the app shows every claim; in-sample and held-out scores are close (see README)
+    X, chunk, pos = nadi.to_sequences(nadi.encode(full_feats, vocab), full.patient.to_numpy())
+    p_claimed = np.exp(-nadi.surprise(model, X)[chunk, pos, nadi.FIELDS.index("sev")])
+    save_scored(full.assign(test=is_test), train, p_claimed, nadi.field_probs(model, X, "sev", sev_ids)[chunk, pos])
 
 
 if __name__ == "__main__":
