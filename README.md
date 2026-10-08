@@ -1,9 +1,28 @@
-# SmartGuard JKN
+<img src="web/nadi.svg" width="64" alt="Logo NADI">
 
-Prioritas review klaim rawat inap JKN pakai **NADI**, language model kecil yang
-di-training di sequence klaim peserta. Klaim yang value-nya tidak sesuai prediksi model
-naik ke atas queue verifikator. Di atasnya ada profil per faskes, keputusan verifikator
-dengan audit log, dan output FHIR R4.
+# SmartGuard JKN, ditenagai NADI
+
+**NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu
+verifikator BPJS klaim mana yang perlu dicek lebih dulu.** SmartGuard JKN adalah aplikasinya.
+
+Keyboard HP bisa menebak kata berikutnya karena sudah membaca jutaan kalimat. NADI menebak
+isi klaim berikutnya karena sudah membaca 1,7 juta klaim. Kalau tagihan RS jauh dari
+tebakan, klaim itu naik ke urutan atas. NADI tidak memutuskan dan tidak menuduh. Keputusan
+tetap di verifikator.
+
+Contoh dari data: seorang pasien dirawat 4 hari untuk prosedur sendi panggul dan RS menagih
+severity III. NADI memperkirakan severity II (81 dari 100 klaim serupa). Selisihnya sekitar
+Rp16,7 juta, jadi klaim ini naik ke atas queue.
+
+NADI di-training dari nol: 4 juta parameter, 23 menit di satu laptop, tanpa API pihak lain.
+Detailnya di [MODEL_CARD.md](MODEL_CARD.md). Penjelasan untuk pembaca umum ada di halaman
+`/tentang` di aplikasi.
+
+## Ringkasan teknis
+
+NADI adalah language model kecil yang di-training di sequence klaim peserta. Klaim yang
+value-nya tidak sesuai prediksi model naik ke atas queue verifikator. Di atasnya ada profil
+per faskes, keputusan verifikator dengan audit log, dan bridging FHIR R4 dua arah.
 
 Entri BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan.
 Fokus: upcoding, pemecahan episode, repeat billing.
@@ -85,9 +104,53 @@ catatan, dan probabilitas dari model saat keputusan dibuat.
 Prototype ini belum punya login, jadi nama verifikator masih diketik manual. Hash chain
 juga tidak mendeteksi baris terakhir yang dihapus.
 
-## Output FHIR
+## Bridging FHIR dan SATUSEHAT
 
-`GET /api/claim/{row}/fhir` mengembalikan Bundle FHIR R4:
+| Endpoint | Isi |
+|---|---|
+| `GET /api/claim/{row}/fhir` | Hasil NADI sebagai Bundle: RiskAssessment + Provenance + Device |
+| `GET /api/claim/{row}/fhir/claim` | Klaim dan riwayatnya sebagai Bundle: Patient, Organization, Encounter, Claim |
+| `POST /api/fhir/assess` | Bundle klaim masuk, Bundle hasil keluar. Dengan `?send=true` hasilnya juga dikirim |
+| `GET /api/claim/{row}/satusehat` | Pratinjau request ke SATUSEHAT. Tidak mengirim apa pun |
+
+Posisi NADI di alur klaim SATUSEHAT: di sisi BPJS, setelah `Claim` masuk dan sebelum
+`ClaimResponse` hasil verifikasi keluar.
+
+Tujuan pengiriman diatur lewat environment variable, bukan lewat request:
+
+```bash
+# SATUSEHAT (OAuth2 client credentials). Default host: sandbox.
+export SATUSEHAT_CLIENT_ID=... SATUSEHAT_CLIENT_SECRET=...
+export SATUSEHAT_HOST=https://api-satusehat.kemkes.go.id   # opsional, untuk produksi
+
+# atau server FHIR R4 lain
+export FHIR_BASE=http://localhost:8080/fhir
+```
+
+Tanpa keduanya app jalan di mode simulasi: request ditampilkan, tidak dikirim. Ke
+SATUSEHAT yang dikirim hanya `RiskAssessment`, karena `Provenance` dan `Device` belum
+didukung di sana. Ke server FHIR lain, klaim dan hasilnya dikirim sebagai satu transaction.
+Resource yang punya identifier tidak dibuat dua kali kalau dikirim ulang.
+
+Klaim dari data sampel BPJS hanya bisa dipratinjau. Pengiriman sungguhan hanya untuk
+Bundle yang masuk lewat `POST /api/fhir/assess`. Jangan arahkan `FHIR_BASE` ke server
+publik untuk data yang bukan sintetis.
+
+Status pengujian per 8 Oktober 2026:
+
+- Bundle hasil dan Bundle klaim lolos HL7 FHIR Validator (R4 + IG AI Transparency): 0 error.
+- Bolak-balik FHIR pada 300 klaim acak: semua input model identik, probabilitas sama.
+- Uji hidup ke server uji publik `hapi.fhir.org/baseR4` dengan klaim sintetis: tersimpan,
+  reference saling terhubung, bisa dibaca balik, kirim ulang tidak membuat duplikat.
+- Konektor SATUSEHAT mengikuti dokumentasi resmi (token di `/oauth2/v1/accesstoken`,
+  data di `/fhir-r4/v1/{Resource}`) dan diuji dengan server tiruan lokal. **Belum diuji di
+  sandbox SATUSEHAT**: kredensialnya hanya diberikan Kemenkes ke faskes, dinas kesehatan,
+  dan mitra RME lewat pengajuan.
+- Modul klaim BPJS di SATUSEHAT sendiri masih sandbox-only, dan playbook publiknya baru
+  sampai `Invoice`. Jadi struktur `Claim` di sini mengikuti field wajib yang
+  didokumentasikan; kode INA-CBG ditaruh di `diagnosis.packageCode`.
+
+Isi Bundle hasil:
 
 - `RiskAssessment`: probabilitas tiap severity level, dengan security label `AIAST`.
 - `Provenance`: NADI sebagai author, verifikator sebagai verifier (kalau sudah ada
@@ -96,8 +159,7 @@ juga tidak mendeteksi baris terakhir yang dihapus.
 
 Provenance dan Device mengikuti profil AI-Provenance dan AI-Device dari implementation
 guide HL7 [AI Transparency on FHIR](https://build.fhir.org/ig/HL7/aitransparency-ig/)
-(STU1 ballot, basis R4). Bundle sudah dicek dengan HL7 FHIR Validator terhadap R4 dan
-IG tersebut: 0 error.
+(STU1 ballot, basis R4).
 
 Per 5 Oktober 2026, dokumentasi SATUSEHAT mencantumkan `RiskAssessment`, `Claim`, dan
 `ClaimResponse`, tetapi belum `Provenance` dan `Device`. Jadi score-nya sudah bisa
@@ -105,6 +167,7 @@ dibawa SATUSEHAT, sedangkan catatan siapa yang menghasilkan dan siapa yang memve
 belum.
 
 Identifier di Bundle masih placeholder. Di produksi isinya nomor SEP dan IHS patient ID.
+URL code system untuk INA-CBG dan kelas RS juga placeholder.
 
 ## Setup
 
@@ -116,7 +179,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app:app       # buka http://localhost:8000
 ```
 
-`python test_nadi.py` untuk quick check tokenizer, rule, dan indeks faskes.
+`python test_nadi.py` untuk quick check tokenizer, rule, indeks faskes, dan bridge FHIR.
 
 Data sampel BPJS Kesehatan dan turunannya tidak ikut di repo. ID peserta dan faskes
 di-shuffle ulang waktu data cleaning.
@@ -129,4 +192,6 @@ di-shuffle ulang waktu data cleaning.
 | `nadi.py` | Tokenizer, model, scoring, rule-based check, indeks faskes |
 | `train.py` | Training |
 | `evaluate.py` | Evaluasi dengan injected anomaly, score untuk seluruh sample |
-| `app.py`, `web/index.html` | Priority queue, profil faskes, simulator klaim, keputusan verifikator, output FHIR |
+| `bridge.py` | Klaim dan hasil NADI sebagai FHIR R4 (dua arah), client SATUSEHAT |
+| `app.py`, `web/` | Priority queue, profil faskes, simulator klaim, keputusan verifikator, halaman Tentang |
+| `MODEL_CARD.md` | Kartu model NADI |
