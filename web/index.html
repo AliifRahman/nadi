@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SmartGuard JKN</title>
+<title>SmartGuard JKN · NADI</title>
+<link rel="icon" href="/nadi.svg" type="image/svg+xml">
 <style>
   :root {
     color-scheme: light;
@@ -24,7 +25,9 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--surface); color: var(--text);
          font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { padding: 20px 24px 0; }
+  header { padding: 20px 24px 0; display: flex; gap: 14px; align-items: flex-start; }
+  header p { margin: 4px 0 0; max-width: 78ch; }
+  a { color: var(--series); }
   h1 { margin: 0; font-size: 20px; }
   h2 { margin: 0 0 12px; font-size: 15px; }
   .muted { color: var(--text-2); }
@@ -78,19 +81,25 @@
   @media (max-width: 600px) { .review { grid-template-columns: 1fr 1fr 1fr; } .review input { grid-column: 1 / -1; } }
   pre { overflow: auto; max-height: 420px; padding: 12px; margin: 8px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
   summary { cursor: pointer; }
+  .says { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line);
+          border-left: 3px solid var(--series); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+  .says p { margin: 4px 0 0; }
   footer { padding: 0 24px 24px; font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>SmartGuard JKN <span class="muted">· NADI</span></h1>
-  <p class="muted">Prioritas review klaim rawat inap. Model membaca riwayat klaim peserta, lalu menandai value yang anomali.</p>
+  <img src="/nadi.svg" alt="" width="44" height="44">
+  <div>
+    <h1>SmartGuard JKN <span class="muted">· ditenagai NADI</span></h1>
+    <p class="muted">NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu verifikator klaim mana yang perlu dicek lebih dulu. <a href="/tentang">Apa itu NADI?</a></p>
+  </div>
 </header>
 <div class="tiles" id="tiles"></div>
 <main>
   <div class="card">
     <div class="tabs">
-      <button id="tab-model" aria-pressed="true">Severity di atas prediksi</button>
+      <button id="tab-model" aria-pressed="true">Di atas perkiraan NADI</button>
       <button id="tab-rules" aria-pressed="false">Rule-based</button>
       <button id="tab-facilities" aria-pressed="false">Faskes</button>
     </div>
@@ -134,7 +143,7 @@ async function loadTiles() {
   const tiles = [
     ["Klaim (data sampel)", number.format(s.claims)],
     ["Rawat inap", number.format(s.inpatient)],
-    ["Severity di atas prediksi", number.format(s.above)],
+    ["Severity di atas perkiraan NADI", number.format(s.above)],
     ["Potensi selisih (estimasi kasar)", compact(s.potential, "long")],
     ["Kena rule", number.format(s.rules)],
     ["Faskes di atas batas 3σ", `${s.outliers} dari ${number.format(s.facilities)}`],
@@ -154,7 +163,7 @@ async function loadQueue(kind) {
   const rows = await api(`/api/queue?kind=${kind}`);
   document.getElementById("plot").replaceChildren();
   const head = kind === "model"
-    ? ["Klaim", "Kelas RS", "Dx", "CBG", "Claimed → expected", "Probabilitas", "Potensi"]
+    ? ["Klaim", "Kelas RS", "Dx", "CBG", "Ditagih → perkiraan", "Probabilitas", "Potensi"]
     : ["Klaim", "Kelas RS", "Dx", "CBG", "Rule", "Biaya"];
   const body = rows.map(c => h("tr", {},
     h("td", {}, h("button", { onclick: () => loadClaim(c.row) }, `#${c.patient}`), decided(c)),
@@ -281,16 +290,23 @@ async function loadFacility(hospital) {
     h("p", { className: "muted" }, "Rasio ini pembanding antar faskes, bukan bukti. Case-mix yang tidak tertangkap CBG dan kelas RS bisa menjelaskan selisihnya."));
 }
 
+// the assessment in plain sentences, for readers who do not read probabilities
+function kataNadi(data) {
+  return [h("img", { src: "/nadi.svg", alt: "", width: 28, height: 28 }),
+    h("div", {}, h("b", {}, "Kata NADI"), ...data.explanation.map(text => h("p", {}, text)),
+      h("p", { className: "muted" }, "Ini prioritas review, bukan keputusan. Keputusan tetap di verifikator."))];
+}
+
 function assessment(data) {
   const claimed = data.severity.find(s => s.claimed);
   const sev = data.fields.find(f => f.field === "sev");
   const hero = claimed
     ? h("div", { className: "hero" }, h("b", {}, percent(claimed.p)),
-        h("span", {}, `probabilitas severity ${claimed.level} yang diklaim, menurut model`),
+        h("span", {}, `probabilitas severity ${claimed.level} yang ditagih, menurut NADI`),
         sev.anomaly ? h("span", { className: "flag" }, "⚠ Anomali, prioritas review") : h("span", { className: "ok" }, "✓ Normal"))
     : h("p", { className: "muted" }, "Klaim rawat jalan tidak punya severity level.");
   const bars = h("div", { className: "bars" }, ...data.severity.flatMap(s => [
-    h("span", {}, `Severity ${s.level}`, s.claimed ? h("span", { className: "muted" }, " · diklaim") : null),
+    h("span", {}, `Severity ${s.level}`, s.claimed ? h("span", { className: "muted" }, " · ditagih") : null),
     h("div", { className: "track", title: `Severity ${s.level}: ${percent(s.p)}` }, h("div", { className: "fill", style: `width:${s.p * 100}%` })),
     h("span", {}, percent(s.p)),
   ]));
@@ -312,10 +328,13 @@ async function loadClaim(row) {
   document.getElementById("sec-options").replaceChildren(...data.options.sec.map(([value, label]) => h("option", { value, label })));
 
   const result = h("div", {}, ...assessment(data));
+  const says = h("div", { className: "says" }, ...kataNadi(data));
   const controls = {};
   const simulate = async () => {
     const changes = Object.fromEntries(Object.entries(controls).map(([k, el]) => [k, el.value.trim().toUpperCase() || "-"]));
-    result.replaceChildren(...assessment(await api(`/api/claim/${row}/simulate`, changes)));
+    const simulated = await api(`/api/claim/${row}/simulate`, changes);
+    result.replaceChildren(...assessment(simulated));
+    says.replaceChildren(...kataNadi(simulated));
   };
   const select = (field, options) => controls[field] = h("select", { onchange: simulate },
     ...options.map(o => h("option", { value: o, selected: o === value(field) }, o)));
@@ -335,20 +354,26 @@ async function loadClaim(row) {
     loadTiles();
     loadClaim(row);
   };
-  const fhir = h("pre");
-  const showFhir = async e => {
-    if (e.target.open) fhir.textContent = JSON.stringify(await api(`/api/claim/${row}/fhir`), null, 2);
+  // FHIR views load when opened; the SATUSEHAT one is a preview, sample data is never sent anywhere
+  const json = path => {
+    const pre = h("pre");
+    return [pre, async e => { if (e.target.open) pre.textContent = JSON.stringify(await api(path), null, 2); }];
   };
+  const [fhir, showFhir] = json(`/api/claim/${row}/fhir`);
+  const [preview, showPreview] = json(`/api/claim/${row}/satusehat`);
+  const target = inpatient ? await api("/api/bridge") : null;
+  const MODES = { "dry-run": "mode simulasi, belum ada kredensial SATUSEHAT", satusehat: "terhubung ke SATUSEHAT", fhir: "terhubung ke server FHIR" };
 
   document.getElementById("detail").replaceChildren(
     h("h2", {}, `Patient journey · peserta #${current.patient} · RS #${current.hospital} (${hospitalClass(current.hosp_class)}) `,
       profiled ? h("button", { onclick: () => loadFacility(current.hospital) }, "Profil faskes") : null),
     h("p", { className: "muted" }, `${current.dx} ${current.dx_name} · ${current.cbg} ${current.cbg_name}`),
+    says,
     h("ol", {}, ...data.visits.map(v => h("li", { ariaCurrent: v.row === row },
       h("button", { onclick: () => loadClaim(v.row), title: `${v.dx_name} · ${v.cbg_name}` },
         h("span", {}, `${v.admit} · ${v.service} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
         h("span", {}, ...flags(v), v.service === "RI" && v.p_claimed < 0.05 ? h("span", { className: "flag" }, "⚠ severity") : null))))),
-    h("h2", {}, "Simulator: ubah klaim, lihat respons model"),
+    h("h2", {}, "Simulator: ubah klaim, lihat respons NADI"),
     h("div", { className: "controls" },
       inpatient ? h("label", {}, "Severity level", select("sev", data.options.sev)) : null,
       h("label", {}, "LOS (hari)", select("los", data.options.los)),
@@ -362,8 +387,10 @@ async function loadClaim(row) {
         h("button", { onclick: () => decide(decision) }, label))),
       ...data.reviews.map(r => h("p", { className: "muted" },
         `${new Date(r.time).toLocaleString("id-ID")} · ${r.reviewer} · ${DECISIONS[r.decision]}${r.note ? " · " + r.note : ""}`))),
-    inpatient ? h("section", {}, h("details", { ontoggle: showFhir },
-      h("summary", {}, "Output FHIR R4: RiskAssessment + Provenance + Device"), fhir)) : null);
+    inpatient ? h("section", {}, h("h2", {}, "Bridging FHIR dan SATUSEHAT"),
+      h("p", { className: "muted" }, `Tujuan: ${target.base} (${MODES[target.mode]}). Klaim dari data sampel hanya dipratinjau, tidak dikirim.`),
+      h("details", { ontoggle: showFhir }, h("summary", {}, "Output FHIR R4: RiskAssessment + Provenance + Device"), fhir),
+      h("details", { ontoggle: showPreview }, h("summary", {}, "Pratinjau kiriman ke SATUSEHAT"), preview)) : null);
   document.querySelector('li[aria-current="true"]').scrollIntoView({ block: "nearest" });
 }
 
@@ -375,6 +402,7 @@ loadTiles();
 const [, facilityLink, link] = location.hash.match(/^#(f?)(\d+)$/) || [];
 if (facilityLink) { loadFacilities(); loadFacility(Number(link)); }
 else { loadQueue("model"); if (link) loadClaim(Number(link)); }
+onhashchange = () => location.reload();
 </script>
 </body>
 </html>

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tentang NADI</title>
+<link rel="icon" href="/nadi.svg" type="image/svg+xml">
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --raised: #ffffff; --line: #e4e3df;
+    --text: #0b0b0b; --text-2: #52514e;
+    --series: #2a78d6; --critical: #d03b3b; --critical-bg: #fbeaea; --good-bg: #e6f4e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --raised: #232322; --line: #383835;
+      --text: #ffffff; --text-2: #c3c2b7;
+      --series: #3987e5; --critical: #e66767; --critical-bg: #3a2222; --good-bg: #1d3320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 16px 48px; }
+  a { color: var(--series); }
+  h1 { margin: 0; font-size: 40px; line-height: 1.1; }
+  h2 { margin: 44px 0 12px; font-size: 24px; }
+  h3 { margin: 0 0 6px; font-size: 17px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--text-2); }
+  .hero { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .lead { font-size: 20px; margin-top: 18px; }
+  .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  .links a { border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; text-decoration: none; background: var(--raised); }
+  .links a:first-child { background: var(--series); border-color: var(--series); color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .grid.four { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .card { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card p:last-child { margin-bottom: 0; }
+  .big { display: block; font-size: 30px; font-weight: 600; line-height: 1.2; }
+  .step { font-size: 13px; color: var(--series); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .bars { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 12px; align-items: center; margin: 12px 0; }
+  .bar { height: 20px; background: var(--series); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar.claimed { background: var(--critical); }
+  .flow { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; margin: 12px 0; }
+  .flow div { flex: 1 1 130px; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+  .flow div.nadi { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  .flow b { display: block; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--text-2); font-weight: 500; }
+  .yes, .no { border-radius: 4px; padding: 1px 8px; font-size: 13px; white-space: nowrap; }
+  .yes { background: var(--good-bg); }
+  .no { background: var(--critical-bg); color: var(--critical); }
+  dt { font-weight: 600; margin-top: 12px; }
+  dd { margin: 2px 0 0; color: var(--text-2); }
+  code { font-size: 13px; overflow-wrap: anywhere; }
+  footer { margin-top: 48px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <img src="/nadi.svg" alt="" width="84" height="84">
+    <div>
+      <h1>NADI</h1>
+      <p class="muted" style="margin:6px 0 0">Membaca denyut nadi setiap klaim JKN.</p>
+    </div>
+  </div>
+  <p class="lead">NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu verifikator BPJS klaim mana yang perlu dicek lebih dulu.</p>
+  <div class="links">
+    <a href="/">Buka aplikasi SmartGuard JKN</a>
+    <a href="/#1201673">Lihat satu contoh klaim</a>
+    <a href="/model-card">Kartu model</a>
+  </div>
+
+  <h2>Masalahnya</h2>
+  <div class="grid">
+    <div class="card"><span class="big">±141 juta</span><p class="muted">klaim rumah sakit per tahun (estimasi dari data sampel). Tidak mungkin diperiksa satu per satu.</p></div>
+    <div class="card"><span class="big">Rp3,3 → 8 juta</span><p class="muted">median tarif rawat inap dari severity I ke severity III. Satu level naik, tagihan naik 50-60%.</p></div>
+    <div class="card"><span class="big">Tidak ada tanda</span><p class="muted">Data klaim tidak mencatat klaim mana yang bermasalah. Verifikator butuh petunjuk harus mulai dari mana.</p></div>
+  </div>
+
+  <h2>Cara kerja NADI</h2>
+  <p>Keyboard HP bisa menebak kata berikutnya karena sudah membaca jutaan kalimat. NADI menebak isi klaim berikutnya karena sudah membaca 1,7 juta klaim. Kalau tagihan RS jauh dari tebakan, klaim itu naik ke urutan atas.</p>
+  <div class="grid">
+    <div class="card"><span class="step">Langkah 1</span><h3>Belajar</h3><p class="muted">NADI membaca riwayat klaim 306 ribu pasien: diagnosis, lama dirawat, kelas RS, dan tingkat tagihannya.</p></div>
+    <div class="card"><span class="step">Langkah 2</span><h3>Menebak</h3><p class="muted">Untuk tiap klaim baru, NADI menebak isinya dari riwayat pasien itu, lalu membandingkannya dengan yang ditagih RS.</p></div>
+    <div class="card"><span class="step">Langkah 3</span><h3>Menandai</h3><p class="muted">Klaim yang paling jauh dari tebakan ditaruh paling atas. Verifikator memeriksa, lalu memutuskan sendiri.</p></div>
+  </div>
+
+  <h2>Contoh nyata</h2>
+  <div class="card">
+    <p>Seorang pasien dirawat 4 hari di RS kelas C untuk prosedur sendi panggul. RS menagih <b>severity III</b>, tingkat tertinggi.</p>
+    <p class="muted">Dari klaim dengan riwayat dan diagnosis seperti ini, perkiraan NADI:</p>
+    <div class="bars">
+      <span>Severity I</span><div><div class="bar" style="width:9.1%"></div></div><span>9 dari 100</span>
+      <span>Severity II</span><div><div class="bar" style="width:81.5%"></div></div><span>81 dari 100</span>
+      <span>Severity III, ditagih</span><div><div class="bar claimed" style="width:9.5%"></div></div><span>9 dari 100</span>
+    </div>
+    <p>Kalau severity II, tarifnya sekitar Rp16,7 juta lebih rendah. NADI menaruh klaim ini di urutan atas. Yang memutuskan tetap verifikator, setelah melihat resume medisnya.</p>
+    <p class="muted">Klaim asli dari data sampel, ID sudah di-shuffle. <a href="/#1201673">Buka klaim ini di aplikasi</a>.</p>
+  </div>
+
+  <h2>Yang NADI lakukan, dan yang tidak</h2>
+  <div class="grid">
+    <div class="card"><h3>Ya</h3>
+      <p class="muted">Mengurutkan klaim yang perlu dicek lebih dulu.</p>
+      <p class="muted">Menjelaskan alasannya per field, dengan kalimat biasa.</p>
+      <p class="muted">Mencatat keputusan verifikator di audit log.</p></div>
+    <div class="card"><h3>Tidak</h3>
+      <p class="muted">Tidak memutuskan klaim layak atau tidak layak.</p>
+      <p class="muted">Tidak menuduh RS atau dokter. Kata yang dipakai "tidak biasa", bukan "fraud".</p>
+      <p class="muted">Tidak mengirim data klaim ke layanan AI di luar.</p></div>
+  </div>
+
+  <h2>AI buatan sendiri</h2>
+  <p>NADI bukan ChatGPT dan tidak memakai API pihak lain. Modelnya di-training dari nol, khusus untuk klaim JKN.</p>
+  <div class="grid four">
+    <div class="card"><span class="big">4 juta</span><p class="muted">parameter. Kecil, jadi cukup jalan di CPU server biasa.</p></div>
+    <div class="card"><span class="big">23 menit</span><p class="muted">training di satu laptop (MacBook M3, 8 GB).</p></div>
+    <div class="card"><span class="big">1,7 juta</span><p class="muted">klaim dari Data Sampel BPJS Kesehatan Edisi 2025.</p></div>
+    <div class="card"><span class="big">0</span><p class="muted">API eksternal. Data klaim tidak keluar dari server.</p></div>
+  </div>
+
+  <h2>Seberapa bagus?</h2>
+  <p>Data sampel tidak punya label fraud. Jadi pengujiannya: klaim milik pasien yang tidak ikut training sengaja diubah, lalu dihitung berapa yang masuk 5% teratas.</p>
+  <table>
+    <tr><th>Yang diubah</th><th>Tertangkap di 5% teratas</th></tr>
+    <tr><td>Severity dinaikkan dari I ke II</td><td>96 dari 100</td></tr>
+    <tr><td>Upcoding yang lebih rapi: tambah satu diagnosis sekunder, severity ikut naik</td><td>49 dari 100</td></tr>
+    <tr><td>Satu rawat inap dipecah jadi dua klaim</td><td>100 dari 100 (cukup dengan rule)</td></tr>
+  </table>
+  <p class="muted" style="margin-top:12px">Upcoding yang rapi baru separuhnya tertangkap. Buktinya ada di rekam medis, bukan di data klaim. NADI belum diuji oleh verifikator sungguhan.</p>
+
+  <h2>Siap terhubung ke SATUSEHAT</h2>
+  <p>SATUSEHAT memakai format data standar internasional bernama FHIR. NADI sudah bisa menerima klaim dalam format itu dan mengeluarkan hasilnya dalam format yang sama.</p>
+  <div class="flow">
+    <div><b>RS</b>rekam medis elektronik</div>
+    <div><b>SATUSEHAT</b>klaim format FHIR</div>
+    <div class="nadi"><b>NADI</b>membaca, lalu memberi prioritas</div>
+    <div><b>Verifikator BPJS</b>memeriksa dan memutuskan</div>
+    <div><b>SATUSEHAT</b>hasil verifikasi kembali ke RS</div>
+  </div>
+  <table>
+    <tr><th>Bagian</th><th>Status</th></tr>
+    <tr><td>Hasil NADI dalam format FHIR R4</td><td><span class="yes">sudah diuji</span> Lolos HL7 FHIR Validator, 0 error.</td></tr>
+    <tr><td>Klaim masuk dalam format FHIR</td><td><span class="yes">sudah diuji</span> 300 klaim acak: hasilnya sama persis dengan jalur biasa.</td></tr>
+    <tr><td>Kirim ke server FHIR sungguhan</td><td><span class="yes">sudah diuji</span> Klaim karangan terkirim ke server uji publik HAPI, tersimpan, dan bisa dibaca balik.</td></tr>
+    <tr><td>Konektor SATUSEHAT (token OAuth2, kirim RiskAssessment)</td><td><span class="no">belum diuji di sandbox</span> Dibuat sesuai dokumentasi resmi dan diuji dengan server tiruan.</td></tr>
+    <tr><td>Catatan siapa yang menghasilkan dan memverifikasi (Provenance, Device)</td><td><span class="no">belum ada di SATUSEHAT</span> Untuk sementara disimpan di sisi NADI.</td></tr>
+  </table>
+  <p class="muted" style="margin-top:12px">Modul klaim BPJS di SATUSEHAT sendiri masih tahap sandbox. Kredensial sandbox hanya diberikan Kemenkes ke faskes, dinas kesehatan, dan mitra RME lewat pengajuan.</p>
+
+  <h2>Kamus istilah</h2>
+  <dl>
+    <dt>Klaim</dt><dd>Tagihan RS ke BPJS Kesehatan untuk satu kunjungan atau satu rawat inap pasien.</dd>
+    <dt>INA-CBG</dt><dd>Sistem paket tarif JKN. Tiap kasus masuk satu kode paket, dan kode itu menentukan besar pembayaran.</dd>
+    <dt>Severity level</dt><dd>Tingkat berat kasus rawat inap di INA-CBG: I, II, atau III. Makin tinggi, makin besar tarifnya.</dd>
+    <dt>Diagnosis sekunder</dt><dd>Penyakit penyerta atau komplikasi. Inilah yang biasanya menaikkan severity level.</dd>
+    <dt>Upcoding</dt><dd>Menagih dengan kode yang lebih mahal dari kondisi pasien sebenarnya.</dd>
+    <dt>LOS</dt><dd>Length of stay, lama pasien dirawat dalam hari.</dd>
+    <dt>Verifikator</dt><dd>Petugas BPJS Kesehatan yang memeriksa klaim sebelum dibayar.</dd>
+    <dt>FHIR</dt><dd>Format standar internasional untuk bertukar data kesehatan antar sistem.</dd>
+    <dt>SATUSEHAT</dt><dd>Platform data kesehatan nasional milik Kementerian Kesehatan, berbasis FHIR.</dd>
+  </dl>
+
+  <footer class="muted">SmartGuard JKN adalah aplikasinya, NADI adalah AI di dalamnya. Entri BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan.</footer>
+</main>
+</body>
+</html>

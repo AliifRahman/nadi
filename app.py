@@ -1,4 +1,4 @@
-"""SmartGuard JKN web app: priority queue, facility profile, claim simulator and reviewer decisions.
+"""SmartGuard JKN web app: priority queue, facility profile, claim simulator, reviewer decisions and FHIR.
 
 Run: uvicorn app:app
 Needs artifacts/nadi.pt (train.py) and artifacts/scored.parquet (evaluate.py).
@@ -12,10 +12,11 @@ from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+import bridge
 import nadi
 
 LEVELS = ["I", "II", "III"]
@@ -52,13 +53,7 @@ OPTIONS = {
 REVIEWS = Path("artifacts/reviews.jsonl")  # append-only; every line carries the hash of the line before it
 write_lock = threading.Lock()
 MODEL_VERSION = hashlib.sha256(Path("artifacts/nadi.pt").read_bytes()).hexdigest()[:12]
-# AI Transparency on FHIR (hl7.fhir.uv.aitransparency, STU1 ballot, FHIR R4)
-AI_IG = "http://hl7.org/fhir/uv/aitransparency"
-AIAST = {"system": "http://terminology.hl7.org/CodeSystem/v3-ObservationValue", "code": "AIAST",
-         "display": "Artificial Intelligence asserted"}
-AI_TYPE = {"coding": [{"system": AI_IG + "/CodeSystem/AIdeviceTypeCS", "code": "Artificial-Intelligence"}]}
-# the sample data has no real identifiers; production would carry the SEP number and the IHS patient id
-BASE = "https://github.com/AliifRahman/nadi/fhir/"
+MAX_FHIR_BODY = 1_000_000  # bytes accepted by /api/fhir/assess
 
 app = FastAPI(title="SmartGuard JKN")
 
@@ -112,6 +107,83 @@ def history(row: int) -> pd.DataFrame:
     return claims.iloc[rows[chunk == chunk[rows == row][0]]]
 
 
+def score(feats: pd.DataFrame, at: int) -> dict:
+    """Model probability of every field of the claim at position `at` in one patient's `feats`."""
+    X = nadi.encode(feats, vocab)[None]
+    p_field = np.exp(-nadi.surprise(model, X)[0, at])
+    p_sev = nadi.field_probs(model, X, "sev", SEV_IDS)[0, at]
+    claim = feats.iloc[at]
+    return {
+        "fields": [
+            {"field": f, "label": LABELS[f], "value": claim[f], "name": name_of(f, claim[f]),
+             "p": float(p), "anomaly": f in FLAGGABLE and bool(p < ANOMALY_BELOW)}
+            for f, p in zip(nadi.FIELDS, p_field)
+        ],
+        "severity": [
+            {"level": level, "p": float(p), "claimed": level == claim["sev"]}
+            for level, p in zip(LEVELS, p_sev)
+        ],
+    }
+
+
+def per_100(p: float) -> str:
+    """A probability as a count out of 100, which lay readers follow better than a percentage."""
+    n = round(p * 100)
+    return "kurang dari 1 dari 100" if n < 1 else "lebih dari 99 dari 100" if n > 99 else f"{n} dari 100"
+
+
+def rupiah(amount: float) -> str:
+    if amount >= 1e6:
+        return f"Rp{amount / 1e6:.1f} juta".replace(".", ",")
+    return "Rp" + f"{amount:,.0f}".replace(",", ".")
+
+
+def explain(result: dict, claim: Optional[pd.Series] = None) -> list:
+    """The assessment in plain Indonesian. `claim` adds what only a stored claim has: rupiah gap and rule hits."""
+    fields = {f["field"]: f for f in result["fields"]}
+    claimed = next((s for s in result["severity"] if s["claimed"]), None)
+    out = []
+    if claimed is None:
+        out.append("Ini klaim rawat jalan, jadi tidak ada severity level yang dinilai.")
+    else:
+        top = max(result["severity"], key=lambda s: s["p"])
+        if top is claimed:
+            out.append(f"Severity {claimed['level']} sesuai perkiraan NADI: {per_100(claimed['p'])} klaim dengan riwayat "
+                       "dan diagnosis seperti ini ada di level itu.")
+        else:
+            out.append(f"RS menagih severity {claimed['level']}. Dari klaim dengan riwayat dan diagnosis seperti ini, "
+                       f"NADI memperkirakan {per_100(top['p'])} ada di severity {top['level']} "
+                       f"dan {per_100(claimed['p'])} di severity {claimed['level']}.")
+        if LEVELS.index(claimed["level"]) > LEVELS.index(top["level"]):
+            if claim is not None and claim.potential > 0:
+                out.append(f"Kalau severity {top['level']}, tarifnya sekitar {rupiah(claim.potential)} lebih rendah "
+                           "(estimasi kasar).")
+            coded = [fields[s] for s in SEC if fields[s]["value"] != "-"]
+            rare = min(coded, key=lambda f: f["p"], default=None)
+            if rare is None:
+                out.append("Tidak ada diagnosis sekunder yang dikode. Di data sampel, kurang dari 1 dari 100 klaim "
+                           "severity II atau III yang tanpa diagnosis sekunder.")
+            elif rare["p"] < ANOMALY_BELOW:
+                name = f" ({rare['name']})" if rare["name"] else ""
+                out.append(f"Diagnosis sekunder {rare['value']}{name} jarang muncul pada kasus seperti ini: "
+                           f"{per_100(rare['p'])}.")
+    unusual = {
+        "gap": "Jarak dari klaim sebelumnya ({value} hari) tidak biasa untuk pasien ini: {n}.",
+        "fac": "Faskesnya {value} dengan klaim sebelumnya, dan itu tidak biasa: {n}.",
+        "los": "LOS {value} hari tidak biasa untuk kasus ini: {n}.",
+    }
+    for field, text in unusual.items():
+        if fields[field]["anomaly"]:
+            value = {"same": "sama", "diff": "berbeda"}.get(fields[field]["value"], fields[field]["value"])
+            out.append(text.format(value=value, n=per_100(fields[field]["p"])))
+    if claim is not None and claim.split_episode:
+        out.append("Pasien masuk lagi paling lama 1 hari setelah pulang, di RS dan diagnosis yang sama. "
+                   "Ini pola pemecahan episode.")
+    if claim is not None and claim.duplicate:
+        out.append("Klaim yang sama persis sudah pernah ditagihkan (repeat billing).")
+    return out
+
+
 def assess(row: int, changes: dict) -> dict:
     """Model probability of every field of claim `row`, after applying `changes`."""
     visits = history(row)
@@ -120,22 +192,9 @@ def assess(row: int, changes: dict) -> dict:
     feats.loc[row, list(changes)] = list(changes.values())
     codes = sorted(c for c in feats.loc[row, SEC] if c != "-")  # secondary dx must stay in canonical order
     feats.loc[row, SEC] = codes + ["-"] * (len(SEC) - len(codes))
-
-    X = nadi.encode(feats, vocab)[None]
-    at = visits.index.get_loc(row)
-    p_field = np.exp(-nadi.surprise(model, X)[0, at])
-    p_sev = nadi.field_probs(model, X, "sev", SEV_IDS)[0, at]
-    return {
-        "fields": [
-            {"field": f, "label": LABELS[f], "value": feats.at[row, f], "name": name_of(f, feats.at[row, f]),
-             "p": float(p), "anomaly": f in FLAGGABLE and bool(p < ANOMALY_BELOW)}
-            for f, p in zip(nadi.FIELDS, p_field)
-        ],
-        "severity": [
-            {"level": level, "p": float(p), "claimed": level == feats.at[row, "sev"]}
-            for level, p in zip(LEVELS, p_sev)
-        ],
-    }
+    result = score(feats, visits.index.get_loc(row))
+    # a simulated claim is no longer the stored one, so its rupiah gap and rule hits do not apply
+    return {**result, "explanation": explain(result, None if changes else claims.iloc[row])}
 
 
 def as_records(df: pd.DataFrame) -> list:
@@ -152,6 +211,21 @@ def as_records(df: pd.DataFrame) -> list:
 @app.get("/")
 def index():
     return FileResponse("web/index.html")
+
+
+@app.get("/tentang")
+def about():
+    return FileResponse("web/tentang.html")
+
+
+@app.get("/nadi.svg")
+def logo():
+    return FileResponse("web/nadi.svg")
+
+
+@app.get("/model-card")
+def model_card():
+    return FileResponse("MODEL_CARD.md", media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/api/summary")
@@ -223,57 +297,68 @@ def review(row: int, body: Review):
     return entry
 
 
+@app.get("/api/bridge")
+def bridge_target():
+    """Where assessments would be delivered. Never includes a secret."""
+    return bridge.target()
+
+
 @app.get("/api/claim/{row}/fhir")
 def fhir(row: int):
     """The assessment as a FHIR R4 Bundle: RiskAssessment, plus who produced and who verified it."""
     c = claim_at(row)
     if c.service != "RI":
         raise HTTPException(422, "only inpatient claims have a severity assessment")
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    reviews = [entry for entry in read_log()[0] if entry["row"] == row]
-    claim_ref = {"identifier": {"system": BASE + "klaim", "value": str(row)},
-                 "display": f"Klaim {c.cbg}-{c.severity}, masuk {c.admit:%Y-%m-%d}"}
-    risk = {
-        "resourceType": "RiskAssessment", "id": f"nadi-{row}",
-        "meta": {"security": [AIAST]},
-        "status": "final",
-        "code": {"text": "Prioritas review klaim rawat inap JKN"},
-        "method": {"text": "NADI: probabilitas tiap field klaim, diprediksi dari riwayat klaim peserta"},
-        "subject": {"identifier": {"system": BASE + "peserta", "value": str(c.patient)}},
-        "occurrenceDateTime": now,
-        "performer": {"reference": "Device/nadi"},
-        "basis": [claim_ref],
-        "prediction": [
-            {"outcome": {"text": f"Severity level {s['level']}"}, "probabilityDecimal": round(s["p"], 4),
-             **({"rationale": "Severity yang diklaim"} if s["claimed"] else {})}
-            for s in assess(row, {})["severity"]
-        ],
-        "note": [{"text": "Prioritas review, bukan keputusan. Keputusan tetap di verifikator."},
-                 *({"time": r["time"], "authorString": r["reviewer"],
-                    "text": f"Keputusan verifikator: {r['decision']}. {r['note']}".strip()} for r in reviews)],
-    }
-    # the reviewer who made the latest decision, if any
-    verifier = [{"resourceType": "Practitioner", "id": f"verifikator-{row}", "name": [{"text": r["reviewer"]}]}
-                for r in reviews[-1:]]
-    agent_type = lambda code: {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/provenance-participant-type", "code": code}]}
-    provenance = {
-        "resourceType": "Provenance", "id": f"nadi-{row}",
-        "meta": {"profile": [AI_IG + "/StructureDefinition/AI-Provenance"]},
-        "target": [{"reference": f"RiskAssessment/nadi-{row}"}],
-        "recorded": now,
-        "reason": [{"coding": [AIAST]}],
-        "agent": [{"type": agent_type("author"), "role": [AI_TYPE], "who": {"reference": "Device/nadi"}},
-                  *({"type": agent_type("verifier"), "who": {"reference": f"Practitioner/{v['id']}"}} for v in verifier)],
-        "entity": [{"role": "source", "what": claim_ref}],
-    }
-    device = {
-        "resourceType": "Device", "id": "nadi",
-        "meta": {"profile": [AI_IG + "/StructureDefinition/AI-Device"]},
-        "type": AI_TYPE,
-        "deviceName": [{"name": "NADI", "type": "model-name"}],
-        "version": [{"value": MODEL_VERSION}],
-        "manufacturer": "SmartGuard JKN",
-    }
-    return {"resourceType": "Bundle", "type": "collection", "entry": [
-        {"fullUrl": f"{BASE}{r['resourceType']}/{r['id']}", "resource": r}
-        for r in (risk, provenance, device, *verifier)]}
+    result = assess(row, {})
+    return bridge.assessment_bundle(
+        key=str(row),
+        subject={"identifier": {"system": bridge.BASE + "peserta", "value": str(c.patient)}},
+        claim_ref={"identifier": {"system": bridge.BASE + "klaim", "value": str(row)},
+                   "display": f"Klaim {c.cbg}-{c.severity}, masuk {c.admit:%Y-%m-%d}"},
+        result=result, explanation=result["explanation"],
+        reviews=[entry for entry in read_log()[0] if entry["row"] == row], version=MODEL_VERSION)
+
+
+@app.get("/api/claim/{row}/fhir/claim")
+def fhir_claim(row: int):
+    """The claim and the claims before it as a FHIR Bundle: the input format of /api/fhir/assess."""
+    return bridge.claim_bundle(history(row).loc[:row])
+
+
+@app.get("/api/claim/{row}/satusehat")
+def satusehat_preview(row: int):
+    """The requests that would deliver this assessment to SATUSEHAT. Nothing is sent: sample data stays here."""
+    risk = fhir(row)["entry"][0]["resource"]
+    risk["subject"] = {"reference": "Patient/{IHS number pasien}"}
+    return bridge.describe(bridge.for_satusehat(risk))
+
+
+@app.post("/api/fhir/assess")
+def assess_fhir(bundle: dict, request: Request, send: bool = False):
+    """Score the newest Claim in a FHIR Bundle of one patient's claims; with `send`, deliver the result too."""
+    if int(request.headers.get("content-length", 0)) > MAX_FHIR_BODY:
+        raise HTTPException(413, "Bundle too large")
+    try:
+        visits, newest = bridge.claims_from_bundle(bundle)
+    except ValueError as error:
+        return JSONResponse(status_code=422, content={"resourceType": "OperationOutcome", "issue": [
+            {"severity": "error", "code": "invalid", "diagnostics": str(error)}]})
+    result = score(nadi.features(visits), len(visits) - 1)
+    key = "".join(ch for ch in str(newest.get("id", "klaim")) if ch.isalnum() or ch in "-.")[:40] or "klaim"
+    assessment = bridge.assessment_bundle(
+        key=key, subject=newest["patient"], claim_ref={"reference": f"Claim/{newest.get('id', key)}"},
+        result=result, explanation=explain(result), reviews=[], version=MODEL_VERSION)
+    if not send:
+        return assessment
+    # SATUSEHAT takes the RiskAssessment only; any other FHIR server gets claim and assessment in one transaction
+    risk = assessment["entry"][0]["resource"]
+    if bridge.target()["mode"] == "fhir":
+        relayed = ("Patient", "Organization", "Encounter", "Condition", "Claim")  # what the bridge reads, nothing else
+        claim_part = {"entry": [e for e in bundle["entry"] if e["resource"]["resourceType"] in relayed]}
+        payload = bridge.as_transaction(claim_part, assessment)
+    else:
+        payload = bridge.for_satusehat(risk)
+    try:
+        return {"assessment": assessment, "delivery": bridge.send(payload)}
+    except OSError as error:
+        raise HTTPException(502, f"FHIR server tidak bisa dihubungi: {error}")
