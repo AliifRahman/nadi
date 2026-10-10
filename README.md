@@ -1,6 +1,8 @@
-<img src="web/nadi.svg" width="64" alt="Logo NADI">
+<img src="docs/nadi.svg" width="64" alt="Logo NADI">
 
 # SmartGuard JKN, ditenagai NADI
+
+Penjelasan dan demo yang bisa dicoba: **https://aliifrahman.github.io/nadi/**
 
 **NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu
 verifikator BPJS klaim mana yang perlu dicek lebih dulu.** SmartGuard JKN adalah aplikasinya.
@@ -15,8 +17,8 @@ severity III. NADI memperkirakan severity II (81 dari 100 klaim serupa). Selisih
 Rp16,7 juta, jadi klaim ini naik ke atas queue.
 
 NADI di-training dari nol: 4 juta parameter, 23 menit di satu laptop, tanpa API pihak lain.
-Detailnya di [MODEL_CARD.md](MODEL_CARD.md). Penjelasan untuk pembaca umum ada di halaman
-`/tentang` di aplikasi.
+Detailnya di [MODEL_CARD.md](MODEL_CARD.md). Penjelasan untuk pembaca umum ada di website di
+atas (sumbernya `docs/`, di aplikasi tampil di `/tentang/`).
 
 ## Ringkasan teknis
 
@@ -193,5 +195,6 @@ di-shuffle ulang waktu data cleaning.
 | `train.py` | Training |
 | `evaluate.py` | Evaluasi dengan injected anomaly, score untuk seluruh sample |
 | `bridge.py` | Klaim dan hasil NADI sebagai FHIR R4 (dua arah), client SATUSEHAT |
-| `app.py`, `web/` | Priority queue, profil faskes, simulator klaim, keputusan verifikator, halaman Tentang |
+| `app.py`, `web/` | Priority queue, profil faskes, simulator klaim, keputusan verifikator |
+| `docs/`, `make_demo.py` | Website publik (GitHub Pages) dan jawaban demo untuk klaim karangan |
 | `MODEL_CARD.md` | Kartu model NADI |
