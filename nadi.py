@@ -82,7 +82,7 @@ def to_sequences(tokens: np.ndarray, patient: np.ndarray):
 
     Returns X [n_chunks, MAX_VISITS, n_fields] and the (chunk, pos) of every claim.
     """
-    # shortcut: fixed chunks, so the first claim of each chunk sees no earlier
+    # simplification: fixed chunks, so the first claim of each chunk sees no earlier
     # history; switch to a sliding window if long histories turn out to matter
     order = pd.Series(patient).groupby(patient).cumcount().to_numpy()
     chunk = pd.factorize(patient * 1000 + order // MAX_VISITS)[0]

@@ -85,7 +85,7 @@ def name_of(field: str, value: str) -> str:
 
 def read_log():
     """The review log: (entries, hash of the last line, whether the hash chain is intact)."""
-    # shortcut: re-read on every request, and the chain shows edits but not a cut-off tail;
+    # simplification: re-read on every request, and the chain shows edits but not a cut-off tail;
     # move to a database and anchor the last hash elsewhere once this is more than a demo
     entries, last, intact = [], "", True
     for line in REVIEWS.read_text().splitlines() if REVIEWS.exists() else []:
