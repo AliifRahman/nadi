@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SmartGuard JKN · NADI</title>
-<link rel="icon" href="/nadi.svg" type="image/svg+xml">
+<link rel="icon" href="/tentang/nadi.svg" type="image/svg+xml">
 <style>
   :root {
     color-scheme: light;
@@ -89,10 +89,10 @@
 </head>
 <body>
 <header>
-  <img src="/nadi.svg" alt="" width="44" height="44">
+  <img src="/tentang/nadi.svg" alt="" width="44" height="44">
   <div>
     <h1>SmartGuard JKN <span class="muted">· ditenagai NADI</span></h1>
-    <p class="muted">NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu verifikator klaim mana yang perlu dicek lebih dulu. <a href="/tentang">Apa itu NADI?</a></p>
+    <p class="muted">NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu verifikator klaim mana yang perlu dicek lebih dulu. <a href="/tentang/">Apa itu NADI?</a></p>
   </div>
 </header>
 <div class="tiles" id="tiles"></div>
@@ -292,7 +292,7 @@ async function loadFacility(hospital) {
 
 // the assessment in plain sentences, for readers who do not read probabilities
 function kataNadi(data) {
-  return [h("img", { src: "/nadi.svg", alt: "", width: 28, height: 28 }),
+  return [h("img", { src: "/tentang/nadi.svg", alt: "", width: 28, height: 28 }),
     h("div", {}, h("b", {}, "Kata NADI"), ...data.explanation.map(text => h("p", {}, text)),
       h("p", { className: "muted" }, "Ini prioritas review, bukan keputusan. Keputusan tetap di verifikator."))];
 }

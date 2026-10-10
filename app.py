@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 import bridge
@@ -213,19 +214,8 @@ def index():
     return FileResponse("web/index.html")
 
 
-@app.get("/tentang")
-def about():
-    return FileResponse("web/tentang.html")
-
-
-@app.get("/nadi.svg")
-def logo():
-    return FileResponse("web/nadi.svg")
-
-
-@app.get("/model-card")
-def model_card():
-    return FileResponse("MODEL_CARD.md", media_type="text/markdown; charset=utf-8")
+# the public explainer page (also published with GitHub Pages) and the logo
+app.mount("/tentang", StaticFiles(directory="docs", html=True))
 
 
 @app.get("/api/summary")
