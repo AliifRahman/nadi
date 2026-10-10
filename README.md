@@ -2,7 +2,8 @@
 
 # SmartGuard JKN, ditenagai NADI
 
-Penjelasan dan demo yang bisa dicoba: **https://aliifrahman.github.io/nadi/**
+Penjelasan dan demo yang bisa dicoba ada di `docs/` (untuk GitHub Pages:
+https://aliifrahman.github.io/nadi/). Di aplikasi lokal halaman yang sama tampil di `/tentang/`.
 
 **NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu
 verifikator BPJS klaim mana yang perlu dicek lebih dulu.** SmartGuard JKN adalah aplikasinya.
