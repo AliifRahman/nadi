@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NADI · AI pembaca klaim JKN</title>
+<meta name="description" content="NADI adalah language model kecil yang di-training dari nol untuk membaca klaim JKN dan memberi tahu verifikator klaim mana yang perlu dicek lebih dulu.">
+<link rel="icon" href="nadi.svg" type="image/svg+xml">
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --raised: #ffffff; --line: #e4e3df;
+    --text: #0b0b0b; --text-2: #52514e;
+    --series: #2a78d6; --critical: #d03b3b; --critical-bg: #fbeaea; --good-bg: #e6f4e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --raised: #232322; --line: #383835;
+      --text: #ffffff; --text-2: #c3c2b7;
+      --series: #3987e5; --critical: #e66767; --critical-bg: #3a2222; --good-bg: #1d3320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 16px 48px; }
+  a { color: var(--series); }
+  h1 { margin: 0; font-size: 40px; line-height: 1.1; }
+  h2 { margin: 52px 0 12px; font-size: 24px; scroll-margin-top: 16px; }
+  h3 { margin: 0 0 6px; font-size: 17px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--text-2); }
+  .hero { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .lead { font-size: 20px; margin-top: 18px; }
+  .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  .links a { border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; text-decoration: none; background: var(--raised); }
+  .links a:first-child { background: var(--series); border-color: var(--series); color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .grid.four { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .card { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card p:last-child { margin-bottom: 0; }
+  .big { display: block; font-size: 30px; font-weight: 600; line-height: 1.2; }
+  /* demo */
+  .demo { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .row > span { min-width: 150px; font-size: 14px; color: var(--text-2); }
+  @media (max-width: 600px) { .row > span { flex-basis: 100%; } }
+  button, select { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; max-width: 100%; }
+  button:hover, button:focus-visible, select:focus-visible { border-color: var(--series); }
+  button[aria-pressed="true"] { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .says { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line);
+          border-left: 3px solid var(--series); border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+  .says.flag { border-left-color: var(--critical); }
+  .says p { margin: 4px 0 0; }
+  .chip { border-radius: 4px; padding: 1px 8px; font-size: 13px; white-space: nowrap; background: var(--good-bg); }
+  .chip.flag, .no { background: var(--critical-bg); color: var(--critical); }
+  .bars { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 12px; align-items: center; }
+  .bar { height: 20px; background: var(--series); border-radius: 0 4px 4px 0; min-width: 2px; transition: width .3s ease; }
+  .bar.flag { background: var(--critical); }
+  /* tokens and flow */
+  .tokens { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+  .tokens span { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  .tokens span:last-child { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  .flow { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; margin: 12px 0; }
+  .flow div { flex: 1 1 130px; background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+  .flow div.nadi { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  .flow b { display: block; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--text-2); font-weight: 500; }
+  .yes, .no { border-radius: 4px; padding: 1px 8px; font-size: 13px; white-space: nowrap; }
+  .yes { background: var(--good-bg); }
+  dt { font-weight: 600; margin-top: 12px; }
+  dd { margin: 2px 0 0; color: var(--text-2); }
+  footer { margin-top: 48px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <img src="nadi.svg" alt="" width="84" height="84">
+    <div>
+      <h1>NADI</h1>
+      <p class="muted" style="margin:6px 0 0">Membaca denyut nadi setiap klaim JKN.</p>
+    </div>
+  </div>
+  <p class="lead">NADI itu AI yang saya buat untuk membantu verifikator BPJS memilih klaim rumah sakit mana yang perlu dicek lebih dulu.</p>
+  <div class="links">
+    <a href="#demo">Coba demo</a>
+    <a href="https://github.com/AliifRahman/nadi">Source code</a>
+    <a href="https://github.com/AliifRahman/nadi/blob/main/MODEL_CARD.md">Kartu model</a>
+    <a href="/" id="app-link" hidden>Buka aplikasi SmartGuard JKN</a>
+  </div>
+
+  <h2>NADI itu apa?</h2>
+  <p>NADI itu language model kecil yang saya training sendiri dari nol, khusus untuk membaca klaim JKN. Bukan ChatGPT, dan tidak pakai API siapa pun.</p>
+  <p>Kerjanya mirip keyboard prediction di HP. Keyboard bisa menebak kata berikutnya karena sudah melihat jutaan kalimat. NADI sudah "membaca" 1,7 juta klaim, jadi dia bisa menebak isi klaim berikutnya dari riwayat seorang pasien. Kalau yang ditagih RS jauh dari tebakannya, klaim itu naik ke atas queue supaya dicek verifikator lebih dulu.</p>
+  <div class="grid">
+    <div class="card"><span class="big">±141 juta</span><p class="muted">klaim rumah sakit masuk tiap tahun (estimasi dari data sampel). Tidak mungkin dicek satu per satu.</p></div>
+    <div class="card"><span class="big">Rp3,3 → 8 juta</span><p class="muted">median tarif rawat inap dari severity I ke III. Naik satu level, tagihan naik 50-60%.</p></div>
+    <div class="card"><span class="big">Tanpa penanda</span><p class="muted">Data klaim tidak mencatat klaim mana yang bermasalah. Verifikator butuh petunjuk mulai dari mana.</p></div>
+  </div>
+
+  <h2 id="demo">Coba sendiri</h2>
+  <p>Pilih satu kasus, lalu ubah isi klaimnya. Coba misalnya diare dengan severity III tanpa diagnosis sekunder.</p>
+  <div class="demo" id="demo-box"><p class="muted">Memuat demo…</p></div>
+  <p class="muted" style="margin-top:12px">Pasien dan klaim di demo ini karangan, bukan data BPJS. Jawabannya dihitung NADI lebih dulu untuk 540 kombinasi, karena halaman ini statis dan tidak bisa menjalankan model. Di aplikasinya NADI menjawab langsung, sekitar 25 ms per klaim.</p>
+
+  <h2>Caranya</h2>
+  <p>Metodenya self-supervised learning, sama seperti cara GPT belajar bahasa: tebak token berikutnya. Bedanya, "bahasa" yang dipelajari NADI adalah klaim.</p>
+  <p>Satu klaim saya pecah jadi 12 token. Contohnya begini:</p>
+  <div class="tokens">
+    <span>P · 18-39 th</span><span>klaim pertama</span><span>RS pertama</span><span>rawat inap</span><span>RS kelas C</span><span>dx A09</span>
+    <span>CBG K-4-17</span><span>LOS 3 hari</span><span>sekunder E86</span><span>sekunder -</span><span>sekunder -</span><span>severity ?</span>
+  </div>
+  <p>Riwayat seorang pasien jadi satu "kalimat" panjang, klaim demi klaim, sampai 20 klaim terakhir. Model belajar menebak tiap token dari token-token sebelumnya. Di contoh tadi, yang ditebak terakhir adalah severity.</p>
+  <p>Tidak ada label fraud yang dipakai, karena datanya memang tidak punya. Yang dianggap perlu dicek adalah token yang probabilitasnya rendah menurut model. Misalnya RS menagih severity III, padahal menurut NADI 99 dari 100 klaim serupa ada di severity I.</p>
+  <p>Untuk pattern yang sudah jelas saya tidak pakai AI. Pasien yang masuk lagi sehari setelah pulang dengan diagnosis yang sama cukup ditangkap pakai rule.</p>
+
+  <h2>AI-nya apa?</h2>
+  <p>GPT-style transformer, decoder-only. Arsitekturnya satu keluarga dengan GPT, cuma jauh lebih kecil: 4 layer, 4 juta parameter. Bisa sekecil itu karena "kosakata" klaim cuma sekitar 2.900 token, bukan seluruh bahasa manusia.</p>
+  <p>Saya tulis pakai PyTorch dan training dari nol di MacBook M3. Tidak ada pretrained model, tidak ada fine-tuning, tidak ada API. Setelah jadi, NADI jalan di CPU biasa, jadi data klaim tidak perlu keluar dari server.</p>
+  <div class="grid four">
+    <div class="card"><span class="big">4 juta</span><p class="muted">parameter</p></div>
+    <div class="card"><span class="big">23 menit</span><p class="muted">training di satu laptop</p></div>
+    <div class="card"><span class="big">1,7 juta</span><p class="muted">klaim dari Data Sampel BPJS Kesehatan Edisi 2025</p></div>
+    <div class="card"><span class="big">±25 ms</span><p class="muted">per klaim di CPU</p></div>
+  </div>
+
+  <h2>Dipakai untuk apa?</h2>
+  <div class="grid">
+    <div class="card"><h3>Verifikator BPJS</h3><p class="muted">Klaim diurutkan dari yang paling jauh dari perkiraan NADI. Tiap klaim ada alasannya dalam kalimat biasa, dan keputusan verifikator dicatat di audit log.</p></div>
+    <div class="card"><h3>Koder di RS</h3><p class="muted">Lewat simulator, isi klaim bisa diubah dan NADI langsung merespons. Arahnya ke cek sebelum kirim: lebih enak diperbaiki di awal daripada tertahan di verifikasi.</p></div>
+    <div class="card"><h3>Profil faskes</h3><p class="muted">Share klaim severity II/III tiap RS dibandingkan dengan RS sejenis. Di sini saya pakai tabel pembanding biasa, karena hasilnya sama baiknya dengan NADI.</p></div>
+  </div>
+  <p style="margin-top:12px">NADI tidak memutuskan apa-apa. Dia cuma bilang "yang ini cek dulu". Keputusannya tetap di verifikator, dan kata yang dipakai di aplikasi adalah "tidak biasa", bukan "fraud".</p>
+
+  <h2>Seberapa bagus?</h2>
+  <p>Datanya tidak punya label fraud, jadi saya uji begini: klaim milik pasien yang tidak ikut training sengaja saya ubah, lalu saya hitung berapa yang masuk 5% teratas.</p>
+  <table>
+    <tr><th>Uji</th><th>NADI</th><th>Pembanding</th></tr>
+    <tr><td>Menebak severity rawat inap dengan benar</td><td>96 dari 100</td><td>84 (tabel frekuensi)</td></tr>
+    <tr><td>Severity dinaikkan dari I ke II, tertangkap di 5% teratas</td><td>96 dari 100</td><td>70</td></tr>
+    <tr><td>Upcoding yang lebih rapi: tambah satu diagnosis sekunder, severity ikut naik</td><td>49 dari 100</td><td>25</td></tr>
+    <tr><td>Satu rawat inap dipecah jadi dua klaim</td><td>98 dari 100</td><td>100 (rule)</td></tr>
+  </table>
+  <p class="muted" style="margin-top:12px">Yang belum bagus: upcoding yang rapi baru separuhnya tertangkap, karena buktinya ada di rekam medis, bukan di data klaim. Untuk LOS yang diperpanjang, NADI hampir sama saja dengan baseline (46 vs 44). Dan NADI belum pernah dipakai verifikator sungguhan.</p>
+
+  <h2>Nyambung ke SATUSEHAT</h2>
+  <p>SATUSEHAT memakai FHIR, format standar internasional untuk data kesehatan. NADI sudah bisa menerima klaim dalam format itu dan mengeluarkan hasilnya dalam format yang sama.</p>
+  <div class="flow">
+    <div><b>RS</b>rekam medis elektronik</div>
+    <div><b>SATUSEHAT</b>klaim format FHIR</div>
+    <div class="nadi"><b>NADI</b>membaca, lalu memberi prioritas</div>
+    <div><b>Verifikator BPJS</b>memeriksa dan memutuskan</div>
+    <div><b>SATUSEHAT</b>hasil verifikasi kembali ke RS</div>
+  </div>
+  <table>
+    <tr><th>Bagian</th><th>Status</th></tr>
+    <tr><td>Hasil NADI dalam format FHIR R4</td><td><span class="yes">sudah diuji</span> Lolos HL7 FHIR Validator, 0 error.</td></tr>
+    <tr><td>Klaim masuk dalam format FHIR</td><td><span class="yes">sudah diuji</span> 300 klaim acak: hasilnya sama persis dengan jalur biasa.</td></tr>
+    <tr><td>Kirim ke server FHIR sungguhan</td><td><span class="yes">sudah diuji</span> Klaim karangan terkirim ke server uji publik HAPI, tersimpan, dan bisa dibaca balik.</td></tr>
+    <tr><td>Konektor SATUSEHAT (token OAuth2, kirim RiskAssessment)</td><td><span class="no">belum diuji di sandbox</span> Dibuat sesuai dokumentasi resmi dan diuji dengan server tiruan.</td></tr>
+    <tr><td>Catatan siapa yang menghasilkan dan memverifikasi (Provenance, Device)</td><td><span class="no">belum ada di SATUSEHAT</span> Untuk sementara disimpan di sisi NADI.</td></tr>
+  </table>
+  <p class="muted" style="margin-top:12px">Modul klaim BPJS di SATUSEHAT sendiri masih tahap sandbox. Kredensial sandbox hanya diberikan Kemenkes ke faskes, dinas kesehatan, dan mitra RME lewat pengajuan.</p>
+
+  <h2>Detail</h2>
+  <table>
+    <tr><td>Jenis</td><td>Language model untuk sequence klaim (GPT-style transformer, decoder-only)</td></tr>
+    <tr><td>Ukuran</td><td>4,0 juta parameter: 4 layer, 4 head, dimensi 256</td></tr>
+    <tr><td>Vocabulary</td><td>2.932 token</td></tr>
+    <tr><td>Context</td><td>20 klaim terakhir satu pasien, 12 token per klaim</td></tr>
+    <tr><td>Data training</td><td>Data Sampel BPJS Kesehatan Edisi 2025: 1.699.219 klaim FKRTL dari 306.710 peserta. 10% peserta disisihkan sebagai test set</td></tr>
+    <tr><td>Training</td><td>Self-supervised (next-token prediction), 5.000 step, 23 menit di MacBook M3 8 GB</td></tr>
+    <tr><td>Framework</td><td>PyTorch. Aplikasinya FastAPI dan satu halaman web</td></tr>
+    <tr><td>Inference</td><td>±25 ms per klaim di CPU laptop</td></tr>
+    <tr><td>Versi model</td><td id="version">18e4ded962cb</td></tr>
+  </table>
+
+  <h2>Kamus istilah</h2>
+  <dl>
+    <dt>Klaim</dt><dd>Tagihan RS ke BPJS Kesehatan untuk satu kunjungan atau satu rawat inap pasien.</dd>
+    <dt>INA-CBG</dt><dd>Sistem paket tarif JKN. Tiap kasus masuk satu kode paket, dan kode itu menentukan besar pembayaran.</dd>
+    <dt>Severity level</dt><dd>Tingkat berat kasus rawat inap di INA-CBG: I, II, atau III. Makin tinggi, makin besar tarifnya.</dd>
+    <dt>Diagnosis sekunder</dt><dd>Penyakit penyerta atau komplikasi. Inilah yang biasanya menaikkan severity level.</dd>
+    <dt>Upcoding</dt><dd>Menagih dengan kode yang lebih mahal dari kondisi pasien sebenarnya.</dd>
+    <dt>LOS</dt><dd>Length of stay, lama pasien dirawat dalam hari.</dd>
+    <dt>Token</dt><dd>Potongan kecil yang dibaca model. Di GPT token itu potongan kata, di NADI potongan klaim.</dd>
+    <dt>Self-supervised</dt><dd>Model belajar dari datanya sendiri, tanpa ada orang yang memberi label benar atau salah.</dd>
+    <dt>Verifikator</dt><dd>Petugas BPJS Kesehatan yang memeriksa klaim sebelum dibayar.</dd>
+    <dt>FHIR, SATUSEHAT</dt><dd>FHIR adalah format standar untuk bertukar data kesehatan. SATUSEHAT adalah platform data kesehatan nasional milik Kemenkes yang memakainya.</dd>
+  </dl>
+
+  <footer class="muted">Dibuat Alif Rahman untuk BPJS Kesehatan Healthkathon 2026, kategori Efisiensi Risiko Fasilitas Kesehatan. NADI adalah AI-nya, SmartGuard JKN aplikasinya. Data sampel BPJS dan file model tidak dipublikasikan di halaman ini.</footer>
+</main>
+
+<script>
+// build DOM from plain text, no innerHTML
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter(child => child != null));
+  return node;
+}
+const per100 = p => { const n = Math.round(p * 100); return n < 1 ? "<1 dari 100" : n > 99 ? ">99 dari 100" : `${n} dari 100`; };
+
+// inside the app this page lives at /tentang/, and there the app itself is one click away
+if (location.pathname.startsWith("/tentang")) document.getElementById("app-link").hidden = false;
+
+fetch("demo.json").then(response => response.json()).then(demo => {
+  const box = document.getElementById("demo-box");
+  const state = { name: "diare", severity: "III", los: 3, sec: 0, again: false };
+  const result = el("div");
+  document.getElementById("version").textContent = demo.model;
+
+  // controls are built once, so focus stays put while the answer below changes
+  const set = (key, value) => { state[key] = value; draw(); };
+  const buttons = (key, options) => options.map(([value, label]) =>
+    Object.assign(el("button", { onclick: () => set(key, value) }, label), { value }));
+  const cases = buttons("name", Object.entries(demo.cases).map(([name, c]) => [name, c.label]));
+  const levels = buttons("severity", ["I", "II", "III"].map(level => [level, level]));
+  const los = el("select", { ariaLabel: "Lama dirawat", onchange: e => set("los", Number(e.target.value)) },
+    ...demo.los.map(days => el("option", { value: days }, `${days} hari`)));
+  const sec = el("select", { ariaLabel: "Diagnosis sekunder", onchange: e => set("sec", Number(e.target.value)) });
+  const again = el("input", { type: "checkbox", onchange: e => set("again", e.target.checked) });
+  const controls = el("div", {},
+    el("div", { className: "row" }, el("span", {}, "Kasus"), ...cases),
+    el("div", { className: "row" }, el("span", {}, "Severity yang ditagih"), ...levels),
+    el("div", { className: "row" }, el("span", {}, "Lama dirawat (LOS)"), los),
+    el("div", { className: "row" }, el("span", {}, "Diagnosis sekunder"), sec),
+    el("div", { className: "row" }, el("label", {}, again, "Pasien ini baru pulang kemarin dari RS yang sama, diagnosis sama")));
+
+  function draw() {
+    const picked = demo.cases[state.name];
+    for (const button of cases) button.setAttribute("aria-pressed", button.value === state.name);
+    for (const button of levels) button.setAttribute("aria-pressed", button.value === state.severity);
+    sec.replaceChildren(...picked.sec.map((label, i) => el("option", { value: i }, label)));
+    los.value = state.los; sec.value = state.sec; again.checked = state.again;
+
+    const answer = demo.answers[`${state.name}|${state.severity}|${state.los}|${state.sec}|${Number(state.again)}`];
+    result.replaceChildren(
+      el("p", { className: "muted" }, `${picked.who} · RS kelas C · ${picked.dx} · ${picked.cbg}`),
+      el("div", { className: answer.flag ? "says flag" : "says" },
+        el("img", { src: "nadi.svg", alt: "", width: 28, height: 28 }),
+        el("div", {}, el("b", {}, "Kata NADI "),
+          el("span", { className: answer.flag ? "chip flag" : "chip" }, answer.flag ? "⚠ cek dulu" : "✓ wajar"),
+          ...answer.says.map(text => el("p", {}, text)))),
+      el("div", { className: "bars" }, ...["I", "II", "III"].flatMap((level, i) => {
+        const claimed = level === state.severity;
+        return [
+          el("span", {}, `Severity ${level}`, claimed ? el("span", { className: "muted" }, " · ditagih") : null),
+          el("div", { title: `Severity ${level}: ${per100(answer.p[i])}` },
+            el("div", { className: claimed && answer.p[i] < 0.05 ? "bar flag" : "bar", style: `width:${answer.p[i] * 100}%` })),
+          el("span", {}, per100(answer.p[i]))];
+      })));
+  }
+  box.replaceChildren(controls, result);
+  draw();
+}).catch(() => {
+  document.getElementById("demo-box").replaceChildren(el("p", { className: "muted" }, "Demo tidak bisa dimuat. Coba muat ulang halaman."));
+});
+</script>
+</body>
+</html>
