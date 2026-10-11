@@ -8,6 +8,8 @@ should review first. SmartGuard JKN is the web application built around the mode
 
 Project page with an interactive demonstration (in Indonesian): https://aliifrahman.github.io/nadi/
 
+A one-minute overview video (in English, with Indonesian subtitles): https://aliifrahman.github.io/nadi/nadi-overview.mp4
+
 This repository is an entry to the BPJS Kesehatan Healthkathon 2026, in the Health Facility
 Risk Efficiency category (*Efisiensi Risiko Fasilitas Kesehatan*). It addresses upcoding,
 episode splitting, and repeat billing.
@@ -218,7 +220,7 @@ the FHIR bridge.
 | `evaluate.py` | Evaluation with injected anomalies, and scores for the full sample |
 | `bridge.py` | Claims and assessments as FHIR R4 in both directions, and the SATUSEHAT client |
 | `app.py`, `web/` | Priority queue, facility profile, claim simulator, and reviewer decisions |
-| `docs/`, `make_demo.py` | Public project page (GitHub Pages) and precomputed demo answers for synthetic claims |
+| `docs/`, `make_demo.py` | Public project page (GitHub Pages), precomputed demo answers for synthetic claims, and the overview video |
 | `MODEL_CARD.md` | Model card for NADI (in Indonesian) |
 
 ## Data and privacy
