@@ -58,14 +58,39 @@ def _prefix(field: str) -> str:
     return field.rstrip("123")  # sec1..sec3 share one vocabulary
 
 
-def build_vocab(feats: pd.DataFrame) -> dict:
+def build_vocab(feats) -> dict:
+    """`feats`: one feature frame, or an iterable of them (read one at a time, see by_patient_group)."""
+    counts = {}
+    for part in [feats] if isinstance(feats, pd.DataFrame) else feats:
+        for field in FIELDS:
+            counts[field] = part[field].value_counts().add(counts.get(field, 0), fill_value=0)
     vocab = {"<pad>": PAD}
     for field in FIELDS:
         vocab.setdefault(f"{_prefix(field)}=?", len(vocab))
-        counts = feats[field].value_counts()
-        for value in counts[counts >= MIN_COUNT].index:
+        n = counts[field].sort_values(ascending=False, kind="stable")
+        for value in n[n >= MIN_COUNT].index:
             vocab.setdefault(f"{_prefix(field)}={value}", len(vocab))
     return vocab
+
+
+def by_patient_group(df: pd.DataFrame, parts: int = 8):
+    """Yield (row numbers, rows) for `parts` groups of patients, every patient whole.
+
+    Features are strings; making them a group at a time keeps several years of claims in 8 GB.
+    """
+    group = df.patient.to_numpy() % parts
+    for g in range(parts):
+        rows = np.flatnonzero(group == g)
+        yield rows, df.iloc[rows]
+
+
+def tokenize(df: pd.DataFrame, vocab: dict) -> np.ndarray:
+    """encode(features(df), vocab) for large frames, as int16."""
+    assert len(vocab) < np.iinfo(np.int16).max
+    out = np.zeros((len(df), len(FIELDS)), dtype=np.int16)
+    for rows, part in by_patient_group(df):
+        out[rows] = encode(features(part), vocab)
+    return out
 
 
 def encode(feats: pd.DataFrame, vocab: dict) -> np.ndarray:
@@ -87,7 +112,7 @@ def to_sequences(tokens: np.ndarray, patient: np.ndarray):
     order = pd.Series(patient).groupby(patient).cumcount().to_numpy()
     chunk = pd.factorize(patient * 1000 + order // MAX_VISITS)[0]
     pos = order % MAX_VISITS
-    X = np.full((chunk.max() + 1, MAX_VISITS, len(FIELDS)), PAD, dtype=np.int64)
+    X = np.full((chunk.max() + 1, MAX_VISITS, len(FIELDS)), PAD, dtype=tokens.dtype)
     X[chunk, pos] = tokens
     return X, chunk, pos
 
@@ -177,7 +202,7 @@ def surprise(model: Nadi, X: np.ndarray, batch: int = 64) -> np.ndarray:
     device = next(model.parameters()).device
     out = np.zeros(X.shape, dtype=np.float32)
     for rows, part in _batches(X, batch):
-        tokens = torch.from_numpy(part).flatten(1).to(device)
+        tokens = torch.from_numpy(part).long().flatten(1).to(device)
         nll = F.cross_entropy(model(tokens).transpose(1, 2), tokens, reduction="none")
         out[rows, :part.shape[1]] = nll.view(part.shape).cpu().numpy()
     return out
@@ -190,7 +215,7 @@ def field_probs(model: Nadi, X: np.ndarray, field: str, ids: list, batch: int = 
     col = FIELDS.index(field)
     out = np.zeros((*X.shape[:2], len(ids)), dtype=np.float32)
     for rows, part in _batches(X, batch):
-        tokens = torch.from_numpy(part).flatten(1).to(device)
+        tokens = torch.from_numpy(part).long().flatten(1).to(device)
         logits = model(tokens).view(*part.shape, -1)[:, :, col, ids]
         out[rows, :part.shape[1]] = F.softmax(logits, dim=-1).cpu().numpy()
     return out

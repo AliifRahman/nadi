@@ -1,4 +1,11 @@
-"""Train NADI on data/claims.parquet. Output: artifacts/nadi.pt"""
+"""Train NADI. Output: artifacts/nadi.pt
+
+  python train.py
+      one edition (data/claims.parquet), 9 patients in 10; evaluate.py uses the rest
+  python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000 --out artifacts/nadi_2019_2023.pt
+      several editions, only claims discharged before 2024; validate.py tests on 2024
+"""
+import argparse
 import math
 import time
 from pathlib import Path
@@ -31,34 +38,36 @@ def batches(X: np.ndarray, n_visits: np.ndarray, rng: np.random.Generator):
 
 
 def loss_on(model, X: np.ndarray) -> torch.Tensor:
-    tokens = torch.from_numpy(X).flatten(1).to(nadi.DEVICE)
+    tokens = torch.from_numpy(X).long().flatten(1).to(nadi.DEVICE)
     return F.cross_entropy(model(tokens).transpose(1, 2), tokens, ignore_index=nadi.PAD)
 
 
-def main() -> None:
+def sequences(df: pd.DataFrame, vocab: dict):
+    X, chunk, _ = nadi.to_sequences(nadi.tokenize(df, vocab), df.patient.to_numpy())
+    return X, np.bincount(chunk)
+
+
+def main(data: Path, out: Path, before, steps: int) -> None:
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
 
-    df = pd.read_parquet("data/claims.parquet")
-    feats = nadi.features(df)
+    df = pd.read_parquet(data)
     test = nadi.is_test(df.patient)
-    vocab = nadi.build_vocab(feats[~test])
-    X, chunk, _ = nadi.to_sequences(nadi.encode(feats, vocab), df.patient.to_numpy())
-    n_visits = np.bincount(chunk)
-    chunk_is_test = np.zeros(len(X), dtype=bool)
-    chunk_is_test[chunk] = test
-
-    X_train, len_train = X[~chunk_is_test], n_visits[~chunk_is_test]
-    X_val = X[chunk_is_test][:256]
+    seen = np.ones(len(df), dtype=bool) if before is None else (df.discharge < before).to_numpy()
+    fit, val = df[~test & seen], df[test & seen]
+    vocab = nadi.build_vocab(nadi.features(part) for _, part in nadi.by_patient_group(fit))
+    X_train, len_train = sequences(fit, vocab)
+    X_val = sequences(val, vocab)[0][:256]
+    del df, fit, val
     model = nadi.Nadi(len(vocab)).to(nadi.DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"vocab {len(vocab):,} | train sequences {len(X_train):,} | "
+    print(f"vocab {len(vocab):,} | train claims {len_train.sum():,} in {len(X_train):,} sequences | "
           f"params {n_params / 1e6:.1f}M | {nadi.DEVICE}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     start = time.time()
-    for step, batch in zip(range(STEPS + 1), batches(X_train, len_train, rng)):
-        lr = LR * min(1, step / WARMUP) * 0.5 * (1 + math.cos(math.pi * step / STEPS))
+    for step, batch in zip(range(steps + 1), batches(X_train, len_train, rng)):
+        lr = LR * min(1, step / WARMUP) * 0.5 * (1 + math.cos(math.pi * step / steps))
         for group in optimizer.param_groups:
             group["lr"] = lr
         loss = loss_on(model, batch)
@@ -72,12 +81,18 @@ def main() -> None:
             with torch.no_grad():
                 val = np.mean([loss_on(model, X_val[i:i + 32]).item() for i in range(0, len(X_val), 32)])
             model.train()
-            print(f"step {step:>5} | train loss {loss.item():.3f} | val loss {val:.3f} | {time.time() - start:>4.0f}s")
+            print(f"step {step:>5} | train loss {loss.item():.3f} | val loss {val:.3f} | {time.time() - start:>4.0f}s", flush=True)
 
-    OUT.parent.mkdir(exist_ok=True)
-    nadi.save(OUT, model, vocab)
-    print(f"saved to {OUT}")
+    out.parent.mkdir(exist_ok=True)
+    nadi.save(out, model, vocab)
+    print(f"saved to {out}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--data", type=Path, default=Path("data/claims.parquet"))
+    parser.add_argument("--out", type=Path, default=OUT)
+    parser.add_argument("--before", type=pd.Timestamp, help="train only on claims discharged before this date")
+    parser.add_argument("--steps", type=int, default=STEPS)
+    args = parser.parse_args()
+    main(args.data, args.out, args.before, args.steps)
