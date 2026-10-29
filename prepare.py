@@ -1,11 +1,14 @@
 """Clean the BPJS Kesehatan sample data (.dta) into one table of hospital claims.
 
-Usage : python prepare.py "<sample data folder>/data"
-Output: data/claims.parquet, one row per claim, sorted by patient and date,
+Usage : python prepare.py "<sample data folder>/data" [more edition folders ...] [--out PATH]
+Output: data/claims.parquet (or --out), one row per claim, sorted by patient and date,
         and data/names.json with dx and CBG group names for display.
+
+Editions share member ids (the sample is a longitudinal cohort), so several
+editions together give each patient a history across years.
 """
+import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -49,12 +52,14 @@ def secondary_diagnoses(folder: Path):
     return wide, names
 
 
-def main(folder: Path) -> None:
+def edition(folder: Path):
+    """Clean claims of one edition, still with the original ids, plus dx and CBG names."""
+    print(f"{folder}")
     df = read(folder, "fkrtl", CLAIM_COLUMNS)
-    print(f"raw claims                  : {len(df):>9,}")
+    print(f"  raw claims                : {len(df):>9,}")
 
     def keep(mask: pd.Series, reason: str) -> pd.DataFrame:
-        print(f"  dropped, {reason:<18}: {(~mask).sum():>9,}")
+        print(f"    dropped, {reason:<18}: {(~mask).sum():>9,}")
         return df[mask]
 
     df = keep(~df.visit_id.duplicated(), "duplicate visit id")
@@ -71,7 +76,7 @@ def main(folder: Path) -> None:
     df["service"] = df.service.map({1: "RJ", 2: "RI"})
 
     members = read(folder, "kepesertaan", {"PSTV01": "patient", "PSTV03": "birth", "PSTV05": "sex"})
-    df = df.merge(members, on="patient", how="left")
+    df = df.merge(members.drop_duplicates("patient"), on="patient", how="left")
     df["age"] = ((df.admit - df.birth).dt.days // 365.25).fillna(-1).astype("int16")
     df["sex"] = df.sex.map({1: "L", 2: "P"})
 
@@ -79,24 +84,40 @@ def main(folder: Path) -> None:
     df = df.join(secondary, on="visit_id")
     df["nsec"] = df.nsec.fillna(0).astype("int16")
 
-    df["patient"] = anonymize(df.patient, seed=1)
-    df["hospital"] = anonymize(df.hospital, seed=2)
-    df = df.sort_values(["patient", "admit", "discharge"]).reset_index(drop=True)
     # CBG group name without the severity word at the end
     cbg_names = df.drop_duplicates("cbg").set_index("cbg").cbg_name
     cbg_names = cbg_names.str.replace(r"\s*\(?(RINGAN|SEDANG|BERAT)\)?$", "", regex=True)
     df = df.drop(columns=["visit_id", "cbg_full", "cbg_name", "birth"])
+    print(f"  clean claims              : {len(df):>9,}  discharged {df.discharge.min():%Y-%m-%d} .. {df.discharge.max():%Y-%m-%d}")
+    return df, dx_names, cbg_names
+
+
+def main(folders: list, out: Path) -> None:
+    parts = [edition(folder) for folder in folders]
+    df = pd.concat([p[0] for p in parts], ignore_index=True)
+    # one id space for every edition, so the same member or facility keeps one number across years
+    df["patient"] = anonymize(df.patient, seed=1)
+    df["hospital"] = anonymize(df.hospital, seed=2)
+    df = df.sort_values(["patient", "admit", "discharge"]).reset_index(drop=True)
 
     assert df[["patient", "hospital", "dx", "cbg", "severity", "service"]].notna().all().all()
     assert (df.los >= 0).all()
 
-    OUT.parent.mkdir(exist_ok=True)
-    df.to_parquet(OUT, index=False)
-    NAMES.write_text(json.dumps({"dx": dx_names.to_dict(), "cbg": cbg_names.to_dict()}))
-    print(f"clean claims                : {len(df):>9,}  ->  {OUT}")
+    out.parent.mkdir(exist_ok=True)
+    df.to_parquet(out, index=False)
+    names = {"dx": {}, "cbg": {}}
+    for _, dx_names, cbg_names in parts:  # later editions win when a name changed
+        names["dx"].update(dx_names.to_dict())
+        names["cbg"].update(cbg_names.to_dict())
+    NAMES.write_text(json.dumps(names))
+    print(f"clean claims                : {len(df):>9,}  ->  {out}")
     print(f"patients {df.patient.nunique():,} | facilities {df.hospital.nunique():,} | "
           f"inpatient {(df.service == 'RI').sum():,}")
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("folders", nargs="+", type=Path)
+    parser.add_argument("--out", type=Path, default=OUT)
+    args = parser.parse_args()
+    main(args.folders, args.out)
