@@ -96,6 +96,59 @@ The web application displays the full sample, not only the test set. In-sample a
 scores are nearly identical (severity accuracy of 96.5% and 96.2% respectively). All figures
 in the table above are from the test set.
 
+### Validation on a later year, 2019–2024
+
+The sample editions share member identifiers: members found in two editions have the same
+date of birth and sex in every case, so the regular sets of the 2021 to 2025 editions form one
+longitudinal cohort. Together they hold 6,998,359 hospital claims from 756,440 members,
+discharged between 2019 and 2024. A second model was trained only on claims discharged up to
+2023 (4,757,638 claims, 10,000 steps, 52 minutes on the same laptop) and tested on the
+195,544 inpatient claims of 2024, a year it never saw (`validate.py`).
+
+| Test on 2024 claims | NADI | Baseline |
+|---|---|---|
+| Severity accuracy, every inpatient claim | 96.4% | 83.0% |
+| Severity accuracy, members with no claim before 2024 | 96.6% | 83.9% |
+| Severity raised from I to II, other fields unchanged | recall 97% | 71% |
+| Realistic upcoding: one secondary diagnosis added, severity I to II | recall 50% | 18% |
+| One inpatient episode split into two claims | recall 98% | rule: recall 100%, 11 false positives |
+
+Accuracy one year ahead matches the accuracy within the same year, so the model has learned
+coding patterns that hold across years rather than patterns of one edition. For realistic
+upcoding, NADI finds far more cases among the top 5% of claims, but over the whole ranking
+the table is slightly better (AUC 0.888 against 0.832).
+
+Rules applied to every claim of the six years:
+
+| Pattern (sub-category) | Claims, 2019–2024 | Weighted, per year | Top 5% of facilities hold |
+|---|---|---|---|
+| Episode split: back at the same hospital with the same diagnosis within a day (8) | 417 | about 5,800 claims, Rp42 billion | 69% |
+| Readmission within 2 to 30 days, same hospital and diagnosis, planned care excluded (16) | 12,388 | about 161,000 claims | 35% |
+| Inpatient stay that starts before the previous stay has ended (11) | 372 | about 4,700 claims, Rp53 billion | 73% |
+| Exact duplicate claim (11) | 110, of which 109 outpatient | about 1,200 claims | |
+
+Planned care (chemotherapy and radiotherapy, dialysis, chronic kidney disease, thalassaemia,
+cancer) made up more than half of all 30-day readmissions and is excluded from that rule.
+Most remaining readmissions are likely to be medically justified, so the rule produces review
+candidates only. 92% of overlapping stays involve two different hospitals, and the median
+overlap is one day, which fits a referral recorded with a one-day offset. The 19% of
+overlapping stays that lie entirely within another stay are the strongest candidates.
+
+Do the same facilities stand out every year? For the severity index (sub-category 4), the
+Spearman correlation between consecutive years is 0.66 to 0.71 across 1,081 to 1,679
+facilities. Of the facilities above the 3σ limit in one year, 24% to 59% are above it again
+the next year, against a base rate of 2%. Facilities with an episode split recur the next
+year in 4% to 31% of cases (base rate 2% to 3%), and facilities with an overlapping stay in
+14% to 19% (base rate 1% to 3%). A pattern that recurs at the same facility is a practice to
+review, not chance. Recurrence alone does not separate fraud from case mix or local coding
+habits.
+
+The difference between billed and verified amounts was examined as a possible label and
+rejected. Over the five editions, 3,313 inpatient claims (0.4%) were paid less than billed.
+The share is the same for severity I, II and III, and the amount paid matches the tariff of a
+lower severity in only 3% of cases. Most cuts apply to every claim of a facility, which
+points to tariff rules rather than reviewer corrections.
+
 ## Limitations
 
 - Upcoding that is internally consistent at the coding level is detected in only about half
@@ -210,6 +263,14 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 `python test_nadi.py` runs a quick check of the tokenizer, the rules, the facility index, and
 the FHIR bridge.
 
+Validation on a later year, with the regular sets of several editions (2021 to 2025):
+
+```bash
+.venv/bin/python prepare.py <edition>/data <edition>/data ... --out data/claims_all.parquet
+.venv/bin/python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000 --out artifacts/nadi_2019_2023.pt
+.venv/bin/python validate.py    # --rules-only skips the model
+```
+
 ## Repository structure
 
 | File | Contents |
@@ -218,6 +279,7 @@ the FHIR bridge.
 | `nadi.py` | Tokenizer, model, scoring, rule-based checks, and facility index |
 | `train.py` | Training |
 | `evaluate.py` | Evaluation with injected anomalies, and scores for the full sample |
+| `validate.py` | Test on a later year, rule hits per year, and facility recurrence across years |
 | `bridge.py` | Claims and assessments as FHIR R4 in both directions, and the SATUSEHAT client |
 | `app.py`, `web/` | Priority queue, facility profile, claim simulator, and reviewer decisions |
 | `docs/`, `make_demo.py` | Public project page (GitHub Pages), precomputed demo answers for synthetic claims, and the overview video |
