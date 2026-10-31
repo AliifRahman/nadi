@@ -51,8 +51,8 @@ def answer(case: dict, severity: str, los: int, sec: list, again: bool) -> dict:
     visits = pd.DataFrame(rows)
     result = app.score(nadi.features(visits), len(visits) - 1)
     flags = nadi.rule_flags(visits).iloc[-1]
-    stored = pd.Series({"potential": 0, "split_episode": bool(flags.split_episode), "duplicate": False})
-    flag = stored.split_episode or any(field["anomaly"] for field in result["fields"])
+    stored = pd.Series({"potential": 0, **flags.astype(bool)})
+    flag = stored.split_episode or stored.readmission or any(field["anomaly"] for field in result["fields"])
     return {"p": [round(s["p"], 4) for s in result["severity"]], "says": app.explain(result, stored), "flag": bool(flag)}
 
 

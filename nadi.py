@@ -17,6 +17,9 @@ MAX_VISITS = 20  # claims per sequence chunk
 MIN_COUNT = 5    # rarer values are mapped to "?" (unknown)
 MIN_FACILITY_CLAIMS = 30  # inpatient claims a facility needs before it is compared with peers
 PAD = 0
+RULES = ["split_episode", "readmission", "overlap", "duplicate"]
+# repeat stays that are usually planned: chemo/radiotherapy, dialysis, kidney disease, thalassaemia, cancer
+PLANNED = r"^(Z49|Z51|N18|I12|D56|C\d\d|D0\d)"
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -225,10 +228,19 @@ def rule_flags(df: pd.DataFrame) -> pd.DataFrame:
     """Rule-based checks for patterns that need no model. `df` sorted by patient and date."""
     prev = df.groupby("patient")[["discharge", "hospital", "dx", "service"]].shift()
     gap = (df.admit - prev.discharge).dt.days
+    # the previous stay, even with outpatient visits in between
+    ri = df[df.service == "RI"]
+    stay = ri.groupby("patient")[["discharge", "hospital", "dx"]].shift()
+    stay_gap = (ri.admit - stay.discharge).dt.days
+    same = (ri.hospital == stay.hospital) & (ri.dx == stay.dx)
     return pd.DataFrame({
         # readmission to the same hospital with the same dx, at most a day after discharge
         "split_episode": (df.service == "RI") & (prev.service == "RI") & (gap <= 1)
                          & (df.hospital == prev.hospital) & (df.dx == prev.dx),
+        # back within a month for the same dx; only a candidate, most of these are justified
+        "readmission": (same & stay_gap.between(2, 30) & ~ri.dx.str.match(PLANNED)).reindex(df.index, fill_value=False),
+        # a stay that starts before the previous one has ended
+        "overlap": (ri.admit < stay.discharge).reindex(df.index, fill_value=False),
         "duplicate": df.duplicated(["patient", "admit", "discharge", "hospital", "cbg", "dx", "severity"]),
     })
 

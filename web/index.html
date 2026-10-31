@@ -134,7 +134,8 @@ async function api(path, body) {
 }
 
 function flags(c) {
-  return [c.split_episode && "Pemecahan episode", c.duplicate && "Repeat billing"].filter(Boolean)
+  return [c.split_episode && "Pemecahan episode", c.readmission && "Readmisi ≤30 hari (kandidat)",
+    c.overlap && "Rawat inap tumpang tindih", c.duplicate && "Repeat billing"].filter(Boolean)
     .map(text => h("span", { className: "flag" }, "⚠ " + text));
 }
 

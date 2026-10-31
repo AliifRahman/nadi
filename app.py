@@ -36,7 +36,8 @@ LABELS = {  # shown in the UI
 model, vocab = nadi.load("artifacts/nadi.pt", device="cpu")
 claims = pd.read_parquet("artifacts/scored.parquet")
 claims["priority"] = claims.potential * (1 - claims.p_claimed)
-to_review = (claims.potential > 0) | claims.split_episode | claims.duplicate
+rule_hit = claims[nadi.RULES].any(axis=1)
+to_review = (claims.potential > 0) | rule_hit
 inpatient = claims[claims.service == "RI"]
 inpatient = inpatient.assign(peer=nadi.peer_expected(inpatient))
 facilities = nadi.facility_index(inpatient, inpatient.peer).join(pd.DataFrame({
@@ -180,6 +181,11 @@ def explain(result: dict, claim: Optional[pd.Series] = None) -> list:
     if claim is not None and claim.split_episode:
         out.append("Pasien masuk lagi paling lama 1 hari setelah pulang, di RS dan diagnosis yang sama. "
                    "Ini pola pemecahan episode.")
+    if claim is not None and claim.readmission:
+        out.append("Pasien kembali dirawat dalam 30 hari di RS yang sama dengan diagnosis yang sama. "
+                   "Banyak readmisi yang wajar, jadi ini hanya kandidat review.")
+    if claim is not None and claim.overlap:
+        out.append("Rawat inap ini dimulai sebelum rawat inap sebelumnya selesai. Cek tanggal dan kemungkinan rujukan.")
     if claim is not None and claim.duplicate:
         out.append("Klaim yang sama persis sudah pernah ditagihkan (repeat billing).")
     return out
@@ -200,7 +206,7 @@ def assess(row: int, changes: dict) -> dict:
 
 def as_records(df: pd.DataFrame) -> list:
     cols = ["patient", "hospital", "hosp_class", "admit", "service", "dx", "cbg", "severity", "expected",
-            "los", "cost", "p_claimed", "potential", "split_episode", "duplicate"]
+            "los", "cost", "p_claimed", "potential", *nadi.RULES]
     out = df[cols].assign(
         admit=df.admit.dt.strftime("%Y-%m-%d"), row=df.index,
         dx_name=df.dx.map(NAMES["dx"]).fillna(""), cbg_name=df.cbg.map(NAMES["cbg"]).fillna(""),
@@ -230,7 +236,7 @@ def summary():
         "inpatient": int((claims.service == "RI").sum()),
         "above": len(above),
         "potential": int(above.potential.sum()),
-        "rules": int((claims.split_episode | claims.duplicate).sum()),
+        "rules": int(rule_hit.sum()),
         "facilities": len(facilities),
         "outliers": int((facilities.z > 3).sum()),
     }
@@ -240,7 +246,10 @@ def summary():
 def queue(kind: str = "model", limit: int = 50):
     limit = min(max(limit, 1), 200)
     if kind == "rules":
-        picked = claims[claims.split_episode | claims.duplicate].nlargest(limit, "cost")
+        # an equal share per rule, or the many readmission candidates would hide the rest
+        share = max(limit // len(nadi.RULES), 1)
+        picked = pd.concat([claims[claims[rule]].nlargest(share, "cost") for rule in nadi.RULES])
+        picked = picked[~picked.index.duplicated()].sort_values("cost", ascending=False)
     else:
         picked = claims[claims.potential > 0].nlargest(limit, "priority")
     return as_records(picked)

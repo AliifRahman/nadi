@@ -36,6 +36,18 @@ def demo() -> None:
     # readmitted a day after discharge, same hospital and dx
     assert nadi.rule_flags(df).split_episode.tolist() == [False, True, False, False]
 
+    stays = pd.DataFrame({
+        "patient": [0, 0, 0, 1, 1],
+        "admit": [day, after(10), after(12), day, after(10)],
+        "discharge": [after(3), after(11), after(14), after(3), after(12)],
+        "hospital": [7, 7, 8, 7, 7], "service": ["RI"] * 5,
+        "dx": ["J18", "J18", "J18", "Z51", "Z51"], "cbg": "x", "severity": "I",
+    })
+    stays.loc[2, "admit"] = after(10) + pd.Timedelta(hours=12)
+    rules = nadi.rule_flags(stays)
+    assert rules.readmission.tolist() == [False, True, False, False, False]  # planned chemo is left out
+    assert rules.overlap.tolist() == [False, False, True, False, False]
+
     vocab = nadi.build_vocab(feats)  # with data this small every value falls back to "?"
     tokens = nadi.encode(feats, vocab)
     assert (tokens[:, nadi.FIELDS.index("dx")] == vocab["dx=?"]).all()
