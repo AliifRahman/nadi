@@ -88,6 +88,7 @@
   <p class="lead" lang="en">NADI: a language model that reads health insurance claims</p>
   <div class="links">
     <a href="#demo">Coba demo</a>
+    <a href="app/">Buka aplikasi</a>
     <a href="https://github.com/AliifRahman/nadi">Source code</a>
     <a href="/" id="app-link" hidden>Buka aplikasi SmartGuard JKN</a>
   </div>
@@ -153,6 +154,7 @@
   <h2>7. Penerapan dan Tata Kelola</h2>
   <p>NADI dijalankan melalui SmartGuard JKN, sebuah aplikasi web yang melayani tiga kebutuhan. Bagi verifikator BPJS Kesehatan, klaim ditampilkan dalam queue yang diurutkan dari yang paling jauh dari perkiraan NADI, dan setiap klaim disertai alasan dalam kalimat biasa. Bagi koder di rumah sakit, tersedia simulator untuk mengubah isi klaim dan melihat respons NADI saat itu juga, sehingga klaim dapat diperiksa sebelum dikirim. Untuk pengawasan di tingkat fasilitas, share klaim severity II dan III setiap rumah sakit dibandingkan dengan rumah sakit sejenis.</p>
   <p>NADI tidak pernah memutuskan, melainkan berfungsi sebagai sistem pendukung keputusan. Keputusan tetap berada di verifikator dan dicatat dalam audit log dengan hash chain, sehingga perubahan pada catatan lama dapat terdeteksi. Istilah yang dipakai di aplikasi adalah "anomali" atau "tidak biasa", bukan "fraud".</p>
+  <p>Aplikasi dapat dicoba langsung pada <a href="app/">versi online</a>. Versi tersebut memakai klaim sintetis, karena data sampel tidak boleh disebarkan, dan jawaban NADI telah dihitung terlebih dahulu.</p>
 
   <h2>8. Interoperabilitas dengan SATUSEHAT</h2>
   <p>SATUSEHAT menggunakan FHIR, format standar internasional untuk pertukaran data kesehatan. NADI dapat menerima klaim dalam format tersebut dan mengeluarkan hasilnya dalam format yang sama. Alur yang dituju ditunjukkan pada Gambar 2, sedangkan status pengujian setiap bagian dirangkum pada Tabel 2.</p>
