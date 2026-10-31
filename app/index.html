@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartGuard JKN · NADI</title>
+<link rel="icon" href="../nadi.svg" type="image/svg+xml">
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --raised: #ffffff; --line: #e4e3df;
+    --text: #0b0b0b; --text-2: #52514e;
+    --series: #2a78d6; --track: #cde2fb;
+    --critical: #d03b3b; --critical-bg: #fbeaea; --good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --raised: #232322; --line: #383835;
+      --text: #ffffff; --text-2: #c3c2b7;
+      --series: #3987e5; --track: #104281;
+      --critical: #e66767; --critical-bg: #3a2222; --good: #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 24px 0; display: flex; gap: 14px; align-items: flex-start; }
+  header p { margin: 4px 0 0; max-width: 78ch; }
+  a { color: var(--series); }
+  h1 { margin: 0; font-size: 20px; }
+  h2 { margin: 0 0 12px; font-size: 15px; }
+  .muted { color: var(--text-2); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; padding: 16px 24px; }
+  .tile, .card { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
+  .tile { padding: 12px 14px; }
+  .tile b { display: block; font-size: 22px; font-weight: 600; }
+  main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 0 24px 24px; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .card { padding: 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  button { font: inherit; color: inherit; background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover, button:focus-visible { border-color: var(--series); }
+  button[aria-pressed="true"], li[aria-current="true"] button { border-color: var(--series); box-shadow: inset 0 0 0 1px var(--series); }
+  .scroll { overflow: auto; max-height: 72vh; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  #detail td:first-child, #detail td:nth-child(2) { white-space: normal; }
+  th { color: var(--text-2); font-weight: 500; position: sticky; top: 0; background: var(--raised); }
+  td.num, th.num { text-align: right; }
+  .flag { color: var(--critical); background: var(--critical-bg); border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
+  .ok { color: var(--text-2); font-size: 12px; }
+  .hero { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 14px; flex-wrap: wrap; }
+  .hero b { font-size: 52px; font-weight: 600; line-height: 1; }
+  .bars { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 12px; align-items: center; }
+  .track { height: 20px; }
+  .fill { height: 100%; min-width: 2px; background: var(--series); border-radius: 0 4px 4px 0; transition: width .35s ease; }
+  .meter { height: 6px; width: 90px; background: var(--track); border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; }
+  .meter i { display: block; height: 100%; background: var(--series); }
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+  select, input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  ol { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+  ol button { width: 100%; text-align: left; display: flex; gap: 10px; justify-content: space-between; }
+  section { margin-top: 20px; }
+  .plot { position: relative; }
+  .plot svg { display: block; width: 100%; height: auto; cursor: pointer; }
+  .plot text { fill: var(--text-2); font-size: 11px; }
+  .plot .grid { stroke: var(--line); }
+  .plot .limit { stroke: var(--text-2); stroke-dasharray: 4 3; fill: none; }
+  .plot circle { fill: var(--series); opacity: .4; }
+  .plot circle.out { fill: var(--critical); opacity: 1; stroke: var(--raised); stroke-width: 1.5; }
+  .plot circle.on { opacity: 1; stroke: var(--text); stroke-width: 2; }
+  .tip { position: absolute; pointer-events: none; background: var(--raised); border: 1px solid var(--line); border-radius: 6px;
+         padding: 6px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / .15); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--series); }
+  .legend i.out { background: var(--critical); }
+  .fill.peer { background: var(--text-2); opacity: .45; }
+  .review { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr) auto auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+  @media (max-width: 600px) { .review { grid-template-columns: 1fr 1fr 1fr; } .review input { grid-column: 1 / -1; } }
+  pre { overflow: auto; max-height: 420px; padding: 12px; margin: 8px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  summary { cursor: pointer; }
+  .says { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line);
+          border-left: 3px solid var(--series); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+  .says p { margin: 4px 0 0; }
+  footer { padding: 0 24px 24px; font-size: 12px; }
+</style>
+</head>
+<body>
+<p style="margin:0;padding:10px 24px;background:var(--critical-bg);font-size:13px"><b>Versi online.</b> Semua klaim, peserta, dan faskes di halaman ini sintetis, bukan data BPJS. Jawaban NADI sudah dihitung sebelumnya, dan keputusan verifikator hanya tersimpan di browser ini.</p>
+<header>
+  <img src="../nadi.svg" alt="" width="44" height="44">
+  <div>
+    <h1>SmartGuard JKN <span class="muted">· ditenagai NADI</span></h1>
+    <p class="muted">NADI adalah AI buatan sendiri yang membaca riwayat klaim pasien dan memberi tahu verifikator klaim mana yang perlu dicek lebih dulu. <a href="../">Apa itu NADI?</a></p>
+  </div>
+</header>
+<div class="tiles" id="tiles"></div>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button id="tab-model" aria-pressed="true">Di atas perkiraan NADI</button>
+      <button id="tab-rules" aria-pressed="false">Rule-based</button>
+      <button id="tab-facilities" aria-pressed="false">Faskes</button>
+    </div>
+    <div id="plot"></div>
+    <div class="scroll"><table id="queue"></table></div>
+  </div>
+  <div class="card" id="detail"><p class="muted">Pilih klaim dari queue.</p></div>
+</main>
+<footer class="muted">Score ini prioritas review, bukan keputusan. Keputusan tetap di verifikator. Data: klaim sintetis.<span id="log"></span></footer>
+<datalist id="sec-options"></datalist>
+
+<script src="static.js"></script>
+<script>
+const number = new Intl.NumberFormat("id-ID");
+const compact = (n, display = "short") => "Rp" + new Intl.NumberFormat("id-ID", { notation: "compact", compactDisplay: display, maximumFractionDigits: 1 }).format(n);
+const percent = p => p < 0.001 ? "<0,1%" : (p * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + "%";
+const CLASSES = { 1: "Kelas A", 2: "Kelas B", 3: "Kelas C", 4: "Kelas D", 5: "Swasta setara A", 6: "Swasta setara B", 7: "Swasta setara C", 8: "Swasta setara D" };
+const hospitalClass = c => CLASSES[c] || "khusus/lainnya";
+const DECISIONS = { layak: "Layak", pending: "Pending", tidak_layak: "Tidak layak" };
+const decided = c => c.decision ? h("span", { className: "ok" }, " ✓ " + DECISIONS[c.decision]) : null;
+
+// build DOM from plain text, no innerHTML
+function h(tag, props = {}, ...children) {
+  const el = Object.assign(document.createElement(tag), props);
+  el.append(...children.filter(c => c != null));
+  return el;
+}
+
+async function api(path, body) {
+  if (window.staticApi) return staticApi(path, body);  // hosted copy, see static.js
+  const res = await fetch(path, body && { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+function flags(c) {
+  return [c.split_episode && "Pemecahan episode", c.readmission && "Readmisi ≤30 hari (kandidat)",
+    c.overlap && "Rawat inap tumpang tindih", c.duplicate && "Repeat billing"].filter(Boolean)
+    .map(text => h("span", { className: "flag" }, "⚠ " + text));
+}
+
+async function loadTiles() {
+  const s = await api("/api/summary");
+  const tiles = [
+    ["Klaim (sintetis)", number.format(s.claims)],
+    ["Rawat inap", number.format(s.inpatient)],
+    ["Severity di atas perkiraan NADI", number.format(s.above)],
+    ["Potensi selisih (estimasi kasar)", compact(s.potential, "long")],
+    ["Kena rule", number.format(s.rules)],
+    ["Faskes di atas batas 3σ", `${s.outliers} dari ${number.format(s.facilities)}`],
+    ["Sudah di-review", number.format(s.reviewed)],
+  ];
+  document.getElementById("log").textContent = ` Audit log: ${s.log_entries} entri, hash chain ${s.log_intact ? "utuh ✓" : "RUSAK ⚠"}.`;
+  document.getElementById("tiles").replaceChildren(...tiles.map(([label, value]) =>
+    h("div", { className: "tile" }, h("span", { className: "muted" }, label), h("b", {}, value))));
+}
+
+function tab(kind) {
+  for (const k of ["model", "rules", "facilities"]) document.getElementById("tab-" + k).setAttribute("aria-pressed", k === kind);
+}
+
+async function loadQueue(kind) {
+  tab(kind);
+  const rows = await api(`/api/queue?kind=${kind}`);
+  document.getElementById("plot").replaceChildren();
+  const head = kind === "model"
+    ? ["Klaim", "Kelas RS", "Dx", "CBG", "Ditagih → perkiraan", "Probabilitas", "Potensi"]
+    : ["Klaim", "Kelas RS", "Dx", "CBG", "Rule", "Biaya"];
+  const body = rows.map(c => h("tr", {},
+    h("td", {}, h("button", { onclick: () => loadClaim(c.row) }, `#${c.patient}`), decided(c)),
+    h("td", {}, hospitalClass(c.hosp_class)),
+    h("td", { title: c.dx_name }, c.dx),
+    h("td", { title: c.cbg_name }, c.cbg),
+    ...(kind === "model"
+      ? [h("td", {}, `${c.severity} → ${c.expected}`), h("td", { className: "num" }, percent(c.p_claimed)), h("td", { className: "num" }, compact(c.potential))]
+      : [h("td", {}, ...flags(c)), h("td", { className: "num" }, compact(c.cost))]),
+  ));
+  document.getElementById("queue").replaceChildren(
+    h("thead", {}, h("tr", {}, ...head.map(t => h("th", { className: ["Probabilitas", "Potensi", "Biaya"].includes(t) ? "num" : "" }, t)))),
+    h("tbody", {}, ...body));
+}
+
+// ---- facility level: observed vs expected share of claims above severity I
+let facilities;
+const ratio = f => f.observed / f.expected;
+const times = v => v.toLocaleString("id-ID", { maximumFractionDigits: 2 }) + "×";
+const outlier = f => f.z > 3;
+const outlierFlag = f => outlier(f) ? h("span", { className: "flag" }, "⚠ di atas batas 3σ") : h("span", { className: "ok" }, "✓ dalam batas");
+
+function s(tag, attrs = {}, ...children) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  el.append(...children);
+  return el;
+}
+
+// funnel plot: ratio vs precision, where z = (ratio - 1) * sqrt(precision) / spread
+function funnel(rows) {
+  const W = 640, H = 300, L = 34, R = 10, T = 8, B = 30;
+  const precision = f => f.expected ** 2 / f.var;
+  const xs = rows.map(precision), x0 = Math.log10(Math.min(...xs)), x1 = Math.log10(Math.max(...xs));
+  const top = Math.ceil(Math.max(...rows.map(ratio)));
+  const x = v => L + (Math.log10(v) - x0) / (x1 - x0) * (W - L - R);
+  const y = v => T + (1 - Math.max(0, Math.min(v, top)) / top) * (H - T - B);
+  const limit = sign => "M" + Array.from({ length: 61 }, (_, i) => 10 ** (x0 + (x1 - x0) * i / 60))
+    .map(p => `${x(p).toFixed(1)},${y(1 + sign * 3 * rows[0].spread / Math.sqrt(p)).toFixed(1)}`).join("L");
+  const dots = [...rows].sort((a, b) => outlier(a) - outlier(b))  // outliers drawn last, on top
+    .map(f => ({ f, cx: x(precision(f)), cy: y(ratio(f)) }));
+  for (const d of dots) d.el = s("circle", { cx: d.cx, cy: d.cy, r: outlier(d.f) ? 4.5 : 3, class: outlier(d.f) ? "out" : "" });
+
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Funnel plot rasio severity per faskes; daftar lengkap ada di tabel di bawah" },
+    ...Array.from({ length: top + 1 }, (_, v) => [
+      s("line", { class: "grid", x1: L, x2: W - R, y1: y(v), y2: y(v) }),
+      s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, v + "×")]).flat(),
+    ...[3, 10, 30, 100, 300].filter(v => Math.log10(v) >= x0 && Math.log10(v) <= x1)
+      .map(v => s("text", { x: x(v), y: H - B + 14, "text-anchor": "middle" }, v)),
+    s("text", { x: W - R, y: H - 2, "text-anchor": "end" }, "presisi (skala log): makin ke kanan, makin banyak klaim faskes itu →"),
+    s("path", { class: "limit", d: limit(1) }), s("path", { class: "limit", d: limit(-1) }),
+    ...dots.map(d => d.el));
+  const tip = h("div", { className: "tip", hidden: true });
+  let near;
+  // the pointer only has to be closest to a dot, not on it
+  svg.onpointermove = e => {
+    const box = svg.getBoundingClientRect(), scale = W / box.width;
+    const px = (e.clientX - box.left) * scale, py = (e.clientY - box.top) * scale;
+    near?.el.classList.remove("on");
+    near = dots.reduce((a, d) => (d.cx - px) ** 2 + (d.cy - py) ** 2 < (a.cx - px) ** 2 + (a.cy - py) ** 2 ? d : a);
+    near.el.classList.add("on");
+    tip.replaceChildren(h("b", {}, times(ratio(near.f))), ` · RS #${near.f.hospital} · ${hospitalClass(near.f.hosp_class)} · ${near.f.n} klaim`);
+    tip.hidden = false;
+    tip.style.left = Math.min(near.cx / scale + 10, box.width - 230) + "px";
+    tip.style.top = near.cy / scale - 34 + "px";
+  };
+  svg.onpointerleave = () => { near?.el.classList.remove("on"); tip.hidden = true; };
+  svg.onclick = () => near && loadFacility(near.f.hospital);
+  return h("div", { className: "plot" },
+    h("div", { className: "legend" },
+      h("span", {}, h("i"), "faskes"), h("span", {}, h("i", { className: "out" }), "⚠ di atas batas 3σ"),
+      h("span", {}, "┄ batas 3σ, sudah dilebarkan untuk overdispersion")),
+    svg, tip);
+}
+
+async function loadFacilities() {
+  tab("facilities");
+  const rows = await (facilities ??= api("/api/facilities"));
+  const head = ["Faskes", "Kelas RS", "Rawat inap", "Severity II/III", "Faskes sejenis", "Rasio", "z", "Untuk review"];
+  const body = [...rows].sort((a, b) => b.z - a.z).slice(0, 50).map(f => h("tr", {},
+    h("td", {}, h("button", { onclick: () => loadFacility(f.hospital) }, `RS #${f.hospital}`)),
+    h("td", {}, hospitalClass(f.hosp_class)),
+    h("td", { className: "num" }, number.format(f.n)),
+    h("td", { className: "num" }, percent(f.observed / f.n)),
+    h("td", { className: "num" }, percent(f.expected / f.n)),
+    h("td", { className: "num" }, times(ratio(f))),
+    h("td", { className: "num" }, f.z.toLocaleString("id-ID", { maximumFractionDigits: 1 })),
+    h("td", { className: "num" }, number.format(f.review))));
+  document.getElementById("plot").replaceChildren(
+    h("p", { className: "muted" }, "Tiap titik satu faskes: share klaim rawat inap severity II/III dibanding faskes sejenis (CBG dan kelas RS sama). 1× = sama dengan faskes sejenis."),
+    funnel(rows));
+  document.getElementById("queue").replaceChildren(
+    h("thead", {}, h("tr", {}, ...head.map((t, i) => h("th", { className: i > 1 ? "num" : "" }, t)))),
+    h("tbody", {}, ...body));
+}
+
+async function loadFacility(hospital) {
+  const f = await api(`/api/facility/${hospital}`);
+  const bar = (label, share, peer) => [
+    h("span", {}, label),
+    h("div", { className: "track", title: `${label}: ${percent(share)}` }, h("div", { className: peer ? "fill peer" : "fill", style: `width:${share * 100}%` })),
+    h("span", {}, percent(share))];
+  const cbg = h("table", {},
+    h("thead", {}, h("tr", {}, ...["CBG", "Klaim", "Severity II/III", "Faskes sejenis", "Selisih"].map((t, i) => h("th", { className: i ? "num" : "" }, t)))),
+    h("tbody", {}, ...f.cbg.map(c => h("tr", {},
+      h("td", {}, c.cbg, h("span", { className: "muted" }, " · " + c.name)),
+      h("td", { className: "num" }, number.format(c.n)),
+      h("td", { className: "num" }, number.format(c.observed)),
+      h("td", { className: "num" }, c.expected.toLocaleString("id-ID", { maximumFractionDigits: 1 })),
+      h("td", { className: "num" }, "+" + c.excess.toLocaleString("id-ID", { maximumFractionDigits: 1 }))))));
+  document.getElementById("detail").replaceChildren(
+    h("h2", {}, `Profil faskes · RS #${hospital} (${hospitalClass(f.hosp_class)})`),
+    h("div", { className: "hero" }, h("b", {}, times(ratio(f))),
+      h("span", {}, "klaim severity II/III dibanding faskes sejenis"), outlierFlag(f)),
+    h("div", { className: "bars" }, ...bar("Faskes ini", f.observed / f.n), ...bar("Faskes sejenis", f.expected / f.n, true)),
+    h("p", { className: "muted" }, `${number.format(f.n)} klaim rawat inap. Pembanding: klaim dengan CBG dan kelas RS yang sama di faskes lain.`),
+    h("section", {}, h("h2", {}, "CBG dengan selisih terbesar"), h("div", { className: "scroll" }, cbg)),
+    h("section", {}, h("h2", {}, `Klaim untuk di-review (${f.claims.length})`),
+      f.claims.length ? h("ol", {}, ...f.claims.map(v => h("li", {},
+        h("button", { onclick: () => loadClaim(v.row), title: `${v.dx_name} · ${v.cbg_name}` },
+          h("span", {}, `${v.admit} · peserta #${v.patient} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
+          h("span", {}, ...flags(v), v.potential > 0 ? h("span", { className: "flag" }, `⚠ severity ${v.severity} → ${v.expected}`) : null, decided(v))))))
+        : h("p", { className: "muted" }, "Tidak ada klaim yang kena rule atau di atas prediksi model.")),
+    h("p", { className: "muted" }, "Rasio ini pembanding antar faskes, bukan bukti. Case-mix yang tidak tertangkap CBG dan kelas RS bisa menjelaskan selisihnya."));
+}
+
+// the assessment in plain sentences, for readers who do not read probabilities
+function kataNadi(data) {
+  return [h("img", { src: "../nadi.svg", alt: "", width: 28, height: 28 }),
+    h("div", {}, h("b", {}, "Kata NADI"), ...data.explanation.map(text => h("p", {}, text)),
+      h("p", { className: "muted" }, "Ini prioritas review, bukan keputusan. Keputusan tetap di verifikator."))];
+}
+
+function assessment(data) {
+  const claimed = data.severity.find(s => s.claimed);
+  const sev = data.fields.find(f => f.field === "sev");
+  const hero = claimed
+    ? h("div", { className: "hero" }, h("b", {}, percent(claimed.p)),
+        h("span", {}, `probabilitas severity ${claimed.level} yang ditagih, menurut NADI`),
+        sev.anomaly ? h("span", { className: "flag" }, "⚠ Anomali, prioritas review") : h("span", { className: "ok" }, "✓ Normal"))
+    : h("p", { className: "muted" }, "Klaim rawat jalan tidak punya severity level.");
+  const bars = h("div", { className: "bars" }, ...data.severity.flatMap(s => [
+    h("span", {}, `Severity ${s.level}`, s.claimed ? h("span", { className: "muted" }, " · ditagih") : null),
+    h("div", { className: "track", title: `Severity ${s.level}: ${percent(s.p)}` }, h("div", { className: "fill", style: `width:${s.p * 100}%` })),
+    h("span", {}, percent(s.p)),
+  ]));
+  const fields = h("table", {},
+    h("thead", {}, h("tr", {}, ...["Field", "Value", "Probabilitas", ""].map(t => h("th", {}, t)))),
+    h("tbody", {}, ...data.fields.map(f => h("tr", {},
+      h("td", {}, f.label),
+      h("td", {}, f.field === "cls" ? hospitalClass(f.value) : f.value, f.name ? h("span", { className: "muted" }, " · " + f.name) : null),
+      h("td", {}, h("span", { className: "meter" }, h("i", { style: `width:${f.p * 100}%` })), " " + percent(f.p)),
+      h("td", {}, f.anomaly ? h("span", { className: "flag" }, "⚠ anomali") : null)))));
+  return [hero, claimed ? bars : null, h("section", {}, h("h2", {}, "Probabilitas per field"), h("div", { className: "scroll" }, fields))];
+}
+
+async function loadClaim(row) {
+  const data = await api(`/api/claim/${row}`);
+  const current = data.visits.find(v => v.row === row);
+  const value = field => data.fields.find(f => f.field === field).value;
+  const profiled = (await (facilities ??= api("/api/facilities"))).some(f => f.hospital === current.hospital);
+  document.getElementById("sec-options").replaceChildren(...data.options.sec.map(([value, label]) => h("option", { value, label })));
+
+  const result = h("div", {}, ...assessment(data));
+  const says = h("div", { className: "says" }, ...kataNadi(data));
+  const controls = {};
+  const simulate = async () => {
+    const changes = Object.fromEntries(Object.entries(controls).map(([k, el]) => [k, el.value.trim().toUpperCase() || "-"]));
+    const simulated = await api(`/api/claim/${row}/simulate`, changes);
+    result.replaceChildren(...assessment(simulated));
+    says.replaceChildren(...kataNadi(simulated));
+  };
+  const select = (field, options) => controls[field] = h("select", { onchange: simulate },
+    ...options.map(o => h("option", { value: o, selected: o === value(field) }, o)));
+  const input = field => controls[field] = h("input", { value: value(field), onchange: simulate });
+  input("sec1").setAttribute("list", "sec-options");
+  input("sec2").setAttribute("list", "sec-options");
+  input("sec3").setAttribute("list", "sec-options");
+  const inpatient = current.service === "RI";
+
+  const reviewer = h("input", { placeholder: "Nama verifikator", maxLength: 60, ariaLabel: "Nama verifikator" });
+  const note = h("input", { placeholder: "Catatan (opsional)", maxLength: 500, ariaLabel: "Catatan" });
+  try { reviewer.value = localStorage.reviewer || ""; } catch {}
+  const decide = async decision => {
+    if (!reviewer.value.trim()) return reviewer.focus();
+    try { localStorage.reviewer = reviewer.value.trim(); } catch {}
+    await api(`/api/claim/${row}/review`, { decision, reviewer: reviewer.value.trim(), note: note.value.trim() });
+    loadTiles();
+    loadClaim(row);
+  };
+  // FHIR views load when opened; the SATUSEHAT one is a preview, sample data is never sent anywhere
+  const json = path => {
+    const pre = h("pre");
+    return [pre, async e => { if (e.target.open) pre.textContent = JSON.stringify(await api(path), null, 2); }];
+  };
+  const [fhir, showFhir] = json(`/api/claim/${row}/fhir`);
+  const [preview, showPreview] = json(`/api/claim/${row}/satusehat`);
+  const target = inpatient ? await api("/api/bridge") : null;
+  const MODES = { "dry-run": "mode simulasi, belum ada kredensial SATUSEHAT", satusehat: "terhubung ke SATUSEHAT", fhir: "terhubung ke server FHIR" };
+
+  document.getElementById("detail").replaceChildren(
+    h("h2", {}, `Patient journey · peserta #${current.patient} · RS #${current.hospital} (${hospitalClass(current.hosp_class)}) `,
+      profiled ? h("button", { onclick: () => loadFacility(current.hospital) }, "Profil faskes") : null),
+    h("p", { className: "muted" }, `${current.dx} ${current.dx_name} · ${current.cbg} ${current.cbg_name}`),
+    says,
+    h("ol", {}, ...data.visits.map(v => h("li", { ariaCurrent: v.row === row },
+      h("button", { onclick: () => loadClaim(v.row), title: `${v.dx_name} · ${v.cbg_name}` },
+        h("span", {}, `${v.admit} · ${v.service} · ${v.dx} · ${v.cbg}${v.severity === "0" ? "" : "-" + v.severity} · ${v.los} hari`),
+        h("span", {}, ...flags(v), v.service === "RI" && v.p_claimed < 0.05 ? h("span", { className: "flag" }, "⚠ severity") : null))))),
+    h("h2", {}, "Simulator: ubah klaim, lihat respons NADI"),
+    h("div", { className: "controls" },
+      inpatient ? h("label", {}, "Severity level", select("sev", data.options.sev)) : null,
+      h("label", {}, "LOS (hari)", select("los", data.options.los)),
+      h("label", {}, "Dx sekunder 1", controls.sec1),
+      h("label", {}, "Dx sekunder 2", controls.sec2),
+      h("label", {}, "Dx sekunder 3", controls.sec3),
+      h("label", {}, " ", h("button", { onclick: () => loadClaim(row) }, "Reset"))),
+    result,
+    h("section", {}, h("h2", {}, "Keputusan verifikator"),
+      h("div", { className: "review" }, reviewer, note, ...Object.entries(DECISIONS).map(([decision, label]) =>
+        h("button", { onclick: () => decide(decision) }, label))),
+      ...data.reviews.map(r => h("p", { className: "muted" },
+        `${new Date(r.time).toLocaleString("id-ID")} · ${r.reviewer} · ${DECISIONS[r.decision]}${r.note ? " · " + r.note : ""}`))),
+    inpatient ? h("section", {}, h("h2", {}, "Bridging FHIR dan SATUSEHAT"),
+      h("p", { className: "muted" }, `Tujuan: ${target.base} (${MODES[target.mode]}). Klaim dari data sampel hanya dipratinjau, tidak dikirim.`),
+      h("details", { ontoggle: showFhir }, h("summary", {}, "Output FHIR R4: RiskAssessment + Provenance + Device"), fhir),
+      h("details", { ontoggle: showPreview }, h("summary", {}, "Pratinjau kiriman ke SATUSEHAT"), preview)) : null);
+  document.querySelector('li[aria-current="true"]').scrollIntoView({ block: "nearest" });
+}
+
+document.getElementById("tab-model").onclick = () => loadQueue("model");
+document.getElementById("tab-rules").onclick = () => loadQueue("rules");
+document.getElementById("tab-facilities").onclick = loadFacilities;
+loadTiles();
+// deep links: /#604914 opens one claim, /#f1393 one facility
+const [, facilityLink, link] = location.hash.match(/^#(f?)(\d+)$/) || [];
+if (facilityLink) { loadFacilities(); loadFacility(Number(link)); }
+else { loadQueue("model"); if (link) loadClaim(Number(link)); }
+onhashchange = () => location.reload();
+</script>
+</body>
+</html>
