@@ -5,6 +5,7 @@ Needs artifacts/nadi.pt (train.py) and artifacts/scored.parquet (evaluate.py).
 """
 import hashlib
 import json
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +35,7 @@ LABELS = {  # shown in the UI
 }
 
 model, vocab = nadi.load("artifacts/nadi.pt", device="cpu")
-claims = pd.read_parquet("artifacts/scored.parquet")
+claims = pd.read_parquet(os.environ.get("NADI_SCORED", "artifacts/scored.parquet"))  # make_app_demo.py sets it
 claims["priority"] = claims.potential * (1 - claims.p_claimed)
 rule_hit = claims[nadi.RULES].any(axis=1)
 to_review = (claims.potential > 0) | rule_hit

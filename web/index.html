@@ -108,7 +108,7 @@
   </div>
   <div class="card" id="detail"><p class="muted">Pilih klaim dari queue.</p></div>
 </main>
-<footer class="muted">Score ini prioritas review, bukan keputusan. Keputusan tetap di verifikator. Data: data sampel dengan ID yang sudah di-shuffle; 10% peserta adalah held-out test set.<span id="log"></span></footer>
+<footer class="muted">Score ini prioritas review, bukan keputusan. Keputusan tetap di verifikator. Data: klaim 2024 dari data sampel dengan ID yang sudah diacak; model hanya belajar dari klaim sampai 2023.<span id="log"></span></footer>
 <datalist id="sec-options"></datalist>
 
 <script>
@@ -128,6 +128,7 @@ function h(tag, props = {}, ...children) {
 }
 
 async function api(path, body) {
+  if (window.staticApi) return staticApi(path, body);  // hosted copy, see static.js
   const res = await fetch(path, body && { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json();

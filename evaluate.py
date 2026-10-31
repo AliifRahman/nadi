@@ -75,8 +75,8 @@ def split_episodes(df: pd.DataFrame, rows: np.ndarray) -> pd.DataFrame:
     return out.sort_values(["patient", "admit", "discharge"], kind="stable").reset_index(drop=True)
 
 
-def save_scored(df, train, p_claimed, p_sev) -> None:
-    """Every claim with its scores, for the app. The summary printed here uses held-out patients only."""
+def scored_frame(df, train, p_claimed, p_sev) -> pd.DataFrame:
+    """Every claim with its rule hits and scores. `train` gives the typical tariff per CBG, class and severity."""
     inpatient = (df.service == "RI").to_numpy()
     claimed = df.severity.map({"0": 0, "I": 1, "II": 2, "III": 3}).to_numpy()
     expected = 1 + p_sev.argmax(axis=1)
@@ -91,6 +91,13 @@ def save_scored(df, train, p_claimed, p_sev) -> None:
     scored["expected"] = LEVELS[expected - 1]
     # gap to the typical tariff at the expected severity; rough, only used for ranking
     scored["potential"] = np.where(inpatient & (claimed > expected), saving, 0).astype("int64")
+    return scored
+
+
+def save_scored(df, train, p_claimed, p_sev) -> None:
+    """Scores for the app. The summary printed here uses held-out patients only."""
+    scored = scored_frame(df, train, p_claimed, p_sev)
+    inpatient = (df.service == "RI").to_numpy()
     scored.to_parquet("artifacts/scored.parquet", index=False)
 
     right = (scored.expected == scored.severity)[inpatient]
