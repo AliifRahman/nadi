@@ -26,9 +26,11 @@ def report(name: str, score: np.ndarray, injected: np.ndarray) -> None:
     rank = pd.Series(score).rank().to_numpy()
     n1, n0 = injected.sum(), (~injected).sum()
     auc = (rank[injected].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)
-    top = np.argsort(-score)[: len(score) // 20]
+    order = np.argsort(-score)
+    top = order[: len(score) // 20]
+    half = (np.cumsum(injected[order]) >= n1 / 2).argmax() / len(score)  # 50% in random order
     print(f"  {name:<32} AUC {auc:.3f} | top 5%: precision {injected[top].mean():.0%}, "
-          f"recall {injected[top].sum() / n1:.0%}")
+          f"recall {injected[top].sum() / n1:.0%} | half found after {half:.1%} of claims")
 
 
 def with_nsec(feats: pd.DataFrame) -> pd.DataFrame:
@@ -103,7 +105,7 @@ def save_scored(df, train, p_claimed, p_sev) -> None:
     print(f"= {weighted / (ri.cost * ri.weight).sum():.2%} of inpatient cost, "
           f"or about Rp{weighted / TEST_SHARE / 1e12:.1f}T per year at national scale (rough)")
     # rules need no training, so count their hits on the whole sample
-    for name in ("split_episode", "duplicate"):
+    for name in nadi.RULES:
         found = scored[scored[name]]
         print(f"rule {name}: {len(found)} claims in the full sample, "
               f"weighted {found.weight.sum():,.0f} claims / Rp{(found.cost * found.weight).sum() / 1e9:.1f}B per year")

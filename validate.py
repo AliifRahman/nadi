@@ -1,7 +1,7 @@
 """Validate NADI on a year it never saw, and look for the chosen fraud patterns in six years of claims.
 
   python prepare.py <edition folders> --out data/claims_all.parquet
-  python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000 --out artifacts/nadi_2019_2023.pt
+  python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000
   python validate.py [--rules-only]
 
 The sample has no fraud labels, so the evidence is indirect:
@@ -20,12 +20,10 @@ import evaluate
 import nadi
 
 DATA = "data/claims_all.parquet"
-MODEL = "artifacts/nadi_2019_2023.pt"
+MODEL = "artifacts/nadi.pt"
 CUTOFF = pd.Timestamp("2024-01-01")
 LEVELS = evaluate.LEVELS
 SEC = evaluate.SEC
-# repeat stays that are usually planned: chemo/radiotherapy, dialysis, kidney disease, thalassaemia, cancer
-PLANNED = r"^(Z49|Z51|N18|I12|D56|C\d\d|D0\d)"
 rng = np.random.default_rng(0)
 
 
@@ -99,34 +97,26 @@ def injected(model, vocab, df: pd.DataFrame, table: pd.DataFrame, pool: dict) ->
 
 
 def stay_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """Per inpatient claim, compared with the same patient's previous inpatient claim."""
-    ri = df[df.service == "RI"]
-    prev = ri.groupby("patient")[["admit", "discharge", "hospital", "dx"]].shift()
-    gap = (ri.admit - prev.discharge).dt.days
-    same = (ri.hospital == prev.hospital) & (ri.dx == prev.dx)
-    rules = nadi.rule_flags(df).loc[ri.index]
-    return pd.DataFrame({
-        "split_episode": rules.split_episode,                        # 8: back again within a day
-        "readmit_30d": same & gap.between(2, 30) & ~ri.dx.str.match(PLANNED),  # 16: back within a month
-        "overlap": prev.discharge.notna() & (ri.admit < prev.discharge),  # 11: two stays at once
-        "duplicate": rules.duplicate,                                # 11: the same claim twice
-        "across_years": rules.split_episode & (prev.discharge.dt.year < ri.admit.dt.year),
-    })
+    """The rules on every claim, plus episode splits that cross into a new year."""
+    flags = nadi.rule_flags(df)
+    prev = df.groupby("patient").discharge.shift()
+    return flags.assign(across_years=flags.split_episode & (prev.dt.year < df.admit.dt.year))
 
 
 def rule_hits(df: pd.DataFrame, flags: pd.DataFrame) -> None:
-    ri = df.loc[flags.index]
-    year = ri.discharge.dt.year
-    print("\n[4] rule hits on every inpatient claim, per discharge year (weighted = JKN population scale)")
+    year = df.discharge.dt.year
+    hits = flags.groupby(year).sum()
+    inpatient = (df.service == "RI").groupby(year).sum()
+    print("\n[4] rule hits on every claim, per discharge year (weighted = JKN population scale)")
     print(f"  {'year':<6}{'inpatient':>10}" + "".join(f"{name:>16}" for name in flags.columns))
-    for y, rows in ri.groupby(year).groups.items():
-        f = flags.loc[rows]
-        print(f"  {y:<6}{len(rows):>10,}" + "".join(f"{f[c].sum():>16,}" for c in flags.columns))
-    for name in ["split_episode", "readmit_30d", "overlap", "duplicate"]:
-        hit = ri[flags[name]]
+    for y in hits.index:
+        print(f"  {y:<6}{inpatient[y]:>10,}" + "".join(f"{hits.at[y, c]:>16,}" for c in flags.columns))
+    ri = (df.service == "RI").to_numpy()
+    for name in nadi.RULES:
+        hit = df[flags[name]]
         print(f"  {name:<14} {len(hit):>6,} claims over six years | weighted about {hit.weight.sum() / year.nunique():,.0f} "
               f"claims and Rp{(hit.cost * hit.weight).sum() / year.nunique() / 1e9:,.0f}B per year | "
-              f"top 5% of facilities hold {top_share(ri, flags[name]):.0%} of them")
+              f"top 5% of facilities hold {top_share(df[ri], flags[name][ri]):.0%} of the inpatient ones")
 
 
 def top_share(ri: pd.DataFrame, hit: pd.Series) -> float:
@@ -148,14 +138,14 @@ def persistence(name: str, score: dict, flagged: dict) -> None:
 
 def facility_traits(df: pd.DataFrame, flags: pd.DataFrame) -> None:
     print("\n[5] do facilities that stand out one year stand out again the next?")
-    ri = df.loc[flags.index]
+    ri = df[df.service == "RI"]
     years = ri.discharge.dt.year
     sev_z, sev_flag, rep_rate, rep_flag = {}, {}, {}, {}
     for y in sorted(years.unique()):
         inpatient = ri[years == y]
         index = nadi.facility_index(inpatient, nadi.peer_expected(inpatient))
         sev_z[y], sev_flag[y] = index.z, index.z > 3
-        f = flags.loc[inpatient.index, ["split_episode", "readmit_30d"]].any(axis=1)
+        f = flags.loc[inpatient.index, ["split_episode", "readmission"]].any(axis=1)
         n = inpatient.groupby("hospital").size()
         rate = f.groupby(inpatient.hospital).mean()[n >= nadi.MIN_FACILITY_CLAIMS]
         rep_rate[y], rep_flag[y] = rate, rate >= rate.quantile(0.95)

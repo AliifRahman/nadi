@@ -2,8 +2,9 @@
 
   python train.py
       one edition (data/claims.parquet), 9 patients in 10; evaluate.py uses the rest
-  python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000 --out artifacts/nadi_2019_2023.pt
-      several editions, only claims discharged before 2024; validate.py tests on 2024
+  python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000
+      several editions, only claims discharged before 2024; validate.py tests on 2024.
+      This is the model the app uses
 """
 import argparse
 import math
