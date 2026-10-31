@@ -94,7 +94,7 @@
 
   <div class="abstract">
     <p><b>Ringkasan.</b> NADI adalah language model berukuran kecil yang di-training dari nol untuk membaca klaim Jaminan Kesehatan Nasional (JKN). Model ini mempelajari riwayat klaim peserta, memperkirakan isi klaim berikutnya, lalu membandingkan perkiraan tersebut dengan klaim yang diajukan rumah sakit. Klaim yang jauh dari perkiraan ditempatkan sebagai prioritas pemeriksaan dan disertai alasan dalam kalimat yang mudah dipahami.</p>
-    <p>Pada pengujian dengan klaim milik peserta yang tidak ikut training, NADI memperkirakan severity level dengan benar pada 96 dari 100 klaim rawat inap dan menempatkan 96 dari 100 upcoding simulasi ke dalam 5% klaim yang diperiksa lebih dulu. NADI berfungsi sebagai sistem pendukung keputusan; keputusan atas setiap klaim tetap berada di tangan verifikator.</p>
+    <p>NADI belajar dari klaim sampai 2023, lalu diuji pada 195.544 klaim rawat inap 2024 yang belum pernah dilihatnya. Pada pengujian tersebut, NADI memperkirakan severity level dengan benar pada 96 dari 100 klaim dan menempatkan 97 dari 100 upcoding simulasi ke dalam 5% klaim yang diperiksa lebih dulu. NADI berfungsi sebagai sistem pendukung keputusan; keputusan atas setiap klaim tetap berada di tangan verifikator.</p>
   </div>
 
   <h2>1. Latar Belakang</h2>
@@ -103,11 +103,12 @@
   <p>Di sisi lain, data klaim tidak memuat penanda klaim mana yang bermasalah. Ketiadaan label tersebut membuat pendekatan supervised learning tidak dapat diterapkan, sehingga diperlukan pendekatan yang mampu belajar dari pola klaim yang wajar.</p>
 
   <h2>2. Tujuan</h2>
-  <p>Berdasarkan latar belakang tersebut, NADI dikembangkan dengan tiga tujuan. Pertama, mengurutkan klaim berdasarkan prioritas pemeriksaan, sehingga klaim yang tidak wajar diperiksa lebih dulu. Kedua, memberikan alasan yang dapat dipahami untuk setiap klaim yang diprioritaskan. Ketiga, mengenali upcoding, pemecahan episode, dan repeat billing tanpa bergantung pada label fraud.</p>
+  <p>Berdasarkan latar belakang tersebut, NADI dikembangkan dengan tiga tujuan. Pertama, mengurutkan klaim berdasarkan prioritas pemeriksaan, sehingga klaim yang tidak wajar diperiksa lebih dulu. Kedua, memberikan alasan yang dapat dipahami untuk setiap klaim yang diprioritaskan. Ketiga, mengenali upcoding, pemecahan episode, repeat billing, dan readmisi tanpa bergantung pada label fraud.</p>
 
   <h2>3. Metode</h2>
   <h3>3.1 Data</h3>
-  <p>Data yang digunakan adalah Data Sampel BPJS Kesehatan Edisi 2025, yang terdiri atas 1.699.219 klaim FKRTL dari 306.710 peserta. Sebanyak 10% peserta disisihkan sebagai test set, sehingga seluruh klaim milik peserta tersebut tidak pernah dilihat model selama training. Pemisahan dilakukan per peserta, bukan per klaim, agar riwayat seorang peserta tidak terbagi antara data training dan data uji.</p>
+  <p>Data yang digunakan adalah set Reguler Data Sampel BPJS Kesehatan Edisi 2021 sampai 2025. Nomor peserta konsisten antar-edisi, sehingga kelima edisi dapat disambung menjadi satu kohort berisi 6.998.359 klaim FKRTL dari 756.440 peserta, dengan tanggal pulang 2019 sampai 2024.</p>
+  <p>Model hanya belajar dari klaim yang selesai sampai 2023. Klaim 2024 disimpan sebagai data uji, dan 10% peserta disisihkan sama sekali dari pelatihan. Dengan cara ini, pengujian mencerminkan penggunaan yang sesungguhnya, yaitu menilai klaim baru yang belum pernah dilihat model.</p>
 
   <h3>3.2 Klaim sebagai rangkaian token</h3>
   <p>Setiap klaim diubah menjadi 12 token yang mewakili isinya: karakteristik peserta, jarak dari klaim sebelumnya, kesamaan rumah sakit dengan klaim sebelumnya, jenis layanan, kelas rumah sakit, diagnosis primer, kode INA-CBG, lama rawat (LOS), tiga diagnosis sekunder, dan severity level. Contoh satu klaim ditunjukkan pada Gambar 1.</p>
@@ -119,12 +120,12 @@
   <p>Riwayat klaim seorang peserta kemudian disusun berurutan, klaim demi klaim, sehingga membentuk satu rangkaian token yang dapat dibaca seperti sebuah kalimat. Konteks yang dibaca model mencakup hingga 20 klaim terakhir.</p>
 
   <h3>3.3 Model</h3>
-  <p>NADI menggunakan arsitektur GPT-style transformer (decoder-only) dengan 4 layer dan 4 juta parameter. Ukuran sekecil itu memadai karena kosakata klaim hanya sekitar 2.900 token, jauh lebih sedikit daripada kosakata bahasa manusia. Model di-training dari nol menggunakan PyTorch dengan metode self-supervised learning, yaitu memperkirakan token berikutnya dari token-token sebelumnya. Cara kerja ini serupa dengan fitur prediksi kata pada keyboard ponsel, yang dapat memperkirakan kata berikutnya karena telah mempelajari sangat banyak kalimat.</p>
+  <p>NADI menggunakan arsitektur GPT-style transformer (decoder-only) dengan 4 layer dan 4,1 juta parameter. Ukuran sekecil itu memadai karena kosakata klaim hanya sekitar 3.400 token, jauh lebih sedikit daripada kosakata bahasa manusia. Model di-training dari nol menggunakan PyTorch dengan metode self-supervised learning, yaitu memperkirakan token berikutnya dari token-token sebelumnya. Cara kerja ini serupa dengan fitur prediksi kata pada keyboard ponsel, yang dapat memperkirakan kata berikutnya karena telah mempelajari sangat banyak kalimat.</p>
   <p>NADI tidak memakai pretrained model, fine-tuning, maupun API pihak lain. Setelah di-training, model dapat dijalankan pada CPU biasa, sehingga data klaim tidak perlu keluar dari server.</p>
 
   <h3>3.4 Penentuan prioritas</h3>
   <p>Untuk setiap klaim, model menghasilkan probabilitas atas nilai yang ditagihkan. Semakin rendah probabilitas tersebut, semakin jauh klaim dari pola yang wajar dan semakin tinggi prioritas pemeriksaannya. Sebagai contoh, apabila rumah sakit menagih severity III sementara menurut NADI 99 dari 100 klaim serupa berada pada severity I, klaim tersebut ditempatkan di urutan atas.</p>
-  <p>Pola yang sudah pasti tidak ditangani oleh model, melainkan oleh rule-based check. Rawat inap ulang paling lama satu hari setelah pulang, di rumah sakit dan dengan diagnosis yang sama, ditandai sebagai pemecahan episode. Klaim yang identik ditandai sebagai repeat billing.</p>
+  <p>Pola yang sudah pasti tidak ditangani oleh model, melainkan oleh rule-based check. Rawat inap ulang paling lama satu hari setelah pulang, di rumah sakit dan dengan diagnosis yang sama, ditandai sebagai pemecahan episode. Klaim yang identik, atau rawat inap yang dimulai sebelum rawat inap sebelumnya selesai, ditandai sebagai repeat billing. Rawat inap ulang dalam 30 hari ditandai sebagai kandidat readmisi, dengan perawatan terjadwal seperti kemoterapi dan cuci darah dikecualikan.</p>
 
   <h2 id="demo">4. Demonstrasi</h2>
   <p>Bagian ini memperlihatkan keluaran NADI secara langsung. Pilih satu kasus, kemudian ubah isi klaimnya, misalnya diare dengan severity III tanpa diagnosis sekunder, dan perhatikan perubahan penilaian NADI.</p>
@@ -132,17 +133,18 @@
   <p class="caption">Peserta dan klaim pada demonstrasi ini bersifat sintetis dan bukan data BPJS. Karena halaman ini statis dan tidak dapat menjalankan model, jawaban untuk 540 kombinasi telah dihitung NADI terlebih dahulu. Pada aplikasi SmartGuard JKN, NADI menjawab secara langsung dalam waktu sekitar 25 ms per klaim.</p>
 
   <h2>5. Hasil Evaluasi</h2>
-  <p>Karena data tidak memuat label fraud, evaluasi dilakukan dengan injected anomaly. Klaim pada test set sengaja diubah, misalnya severity dinaikkan satu level, kemudian dihitung berapa banyak perubahan tersebut yang masuk ke dalam 5% klaim dengan prioritas tertinggi. Hasilnya dibandingkan dengan baseline berupa tabel frekuensi, atau dengan rule untuk pola yang memang dapat dirumuskan sebagai aturan.</p>
+  <p>Karena data tidak memuat label fraud, evaluasi dilakukan pada klaim 2024 dengan injected anomaly. Klaim uji sengaja diubah, misalnya severity dinaikkan satu level, kemudian dihitung berapa banyak perubahan tersebut yang masuk ke dalam 5% klaim dengan prioritas tertinggi. Hasilnya dibandingkan dengan baseline berupa tabel frekuensi, atau dengan rule untuk pola yang memang dapat dirumuskan sebagai aturan.</p>
   <table class="results">
     <tr><th>Pengujian</th><th>NADI</th><th>Pembanding</th></tr>
-    <tr><td>Memperkirakan severity rawat inap dengan benar</td><td>96 dari 100</td><td>84 (tabel frekuensi)</td></tr>
-    <tr><td>Severity dinaikkan dari I ke II, masuk 5% teratas</td><td>96 dari 100</td><td>70</td></tr>
-    <tr><td>Upcoding yang dikode konsisten: satu diagnosis sekunder ditambahkan dan severity ikut naik</td><td>49 dari 100</td><td>25</td></tr>
+    <tr><td>Memperkirakan severity rawat inap dengan benar</td><td>96 dari 100</td><td>83 (tabel frekuensi)</td></tr>
+    <tr><td>Severity dinaikkan dari I ke II, masuk 5% teratas</td><td>97 dari 100</td><td>71</td></tr>
+    <tr><td>Upcoding yang dikode konsisten: satu diagnosis sekunder ditambahkan dan severity ikut naik</td><td>50 dari 100</td><td>18</td></tr>
     <tr><td>Satu rawat inap dipecah menjadi dua klaim</td><td>98 dari 100</td><td>100 (rule)</td></tr>
-    <tr><td>LOS diperpanjang 3 sampai 5 hari</td><td>46 dari 100</td><td>44</td></tr>
+    <tr><td>LOS diperpanjang 3 sampai 5 hari</td><td>47 dari 100</td><td>44</td></tr>
   </table>
-  <p class="caption">Tabel 1. Hasil evaluasi pada test set, yaitu 171.510 klaim dari 30.671 peserta yang tidak ikut training.</p>
-  <p>Tabel 1 menunjukkan bahwa NADI lebih baik daripada baseline dalam memperkirakan severity dan dalam mengenali kenaikan severity. Untuk pemecahan episode, rule sudah menangkap seluruh kasus, sehingga rule itulah yang dipakai di aplikasi.</p>
+  <p class="caption">Tabel 1. Hasil evaluasi pada klaim 2024, tahun yang tidak pernah dilihat model. Pengujian perubahan klaim memakai peserta yang tidak ikut training.</p>
+  <p>Tabel 1 menunjukkan bahwa NADI lebih baik daripada baseline dalam memperkirakan severity dan dalam mengenali kenaikan severity. Untuk menemukan separuh upcoding yang dikode konsisten, cukup memeriksa sekitar 5% sampai 6% klaim menurut urutan NADI, sedangkan urutan acak memerlukan 50%. Keunggulan ini berada di puncak antrean; pada keseluruhan urutan, tabel frekuensi sedikit lebih baik. Untuk pemecahan episode, rule sudah menangkap seluruh kasus, sehingga rule itulah yang dipakai di aplikasi.</p>
+  <p>Pola pada data asli 2019 sampai 2024 memperkuat hasil tersebut. Rule menemukan 417 klaim pemecahan episode dan 372 rawat inap tumpang tindih, dan sebagian besar terkumpul pada 5% faskes. Pada tingkat faskes, indeks severity bertahan antar-tahun dengan korelasi Spearman sekitar 0,7. Dari faskes yang berada di atas batas 3σ pada suatu tahun, 24% sampai 59% berada di atas batas lagi pada tahun berikutnya, jauh di atas peluang kebetulan sebesar 2%. Temuan ini menandai praktik yang layak ditinjau, bukan bukti fraud.</p>
 
   <h2>6. Keterbatasan</h2>
   <p>Terdapat beberapa keterbatasan yang perlu dicatat. Upcoding yang dikode secara konsisten baru tertangkap sekitar separuhnya, karena bukti klinisnya berada di rekam medis dan bukan di data klaim. Untuk LOS yang diperpanjang, kinerja NADI hampir sama dengan baseline. Pada tingkat fasilitas kesehatan, NADI tidak lebih baik daripada tabel pembanding sederhana, sehingga profil faskes menggunakan tabel tersebut.</p>
@@ -175,14 +177,14 @@
   <h2>9. Spesifikasi Teknis</h2>
   <table>
     <tr><td>Jenis</td><td>Language model untuk sequence klaim (GPT-style transformer, decoder-only)</td></tr>
-    <tr><td>Ukuran</td><td>4,0 juta parameter: 4 layer, 4 head, dimensi 256</td></tr>
-    <tr><td>Vocabulary</td><td>2.932 token</td></tr>
+    <tr><td>Ukuran</td><td>4,1 juta parameter: 4 layer, 4 head, dimensi 256</td></tr>
+    <tr><td>Vocabulary</td><td>3.422 token</td></tr>
     <tr><td>Context</td><td>20 klaim terakhir seorang peserta, 12 token per klaim</td></tr>
-    <tr><td>Data</td><td>Data Sampel BPJS Kesehatan Edisi 2025: 1.699.219 klaim FKRTL dari 306.710 peserta, dengan 10% peserta sebagai test set</td></tr>
-    <tr><td>Training</td><td>Self-supervised (next-token prediction), 5.000 step</td></tr>
+    <tr><td>Data</td><td>Set Reguler Data Sampel BPJS Kesehatan Edisi 2021 sampai 2025: 6.998.359 klaim FKRTL dari 756.440 peserta. Training memakai klaim sampai 2023, pengujian memakai klaim 2024</td></tr>
+    <tr><td>Training</td><td>Self-supervised (next-token prediction), 10.000 step, 52 menit pada laptop</td></tr>
     <tr><td>Framework</td><td>PyTorch untuk model, FastAPI dan satu halaman web untuk aplikasi</td></tr>
     <tr><td>Inference</td><td>±25 ms per klaim pada CPU laptop</td></tr>
-    <tr><td>Versi model</td><td id="version">18e4ded962cb</td></tr>
+    <tr><td>Versi model</td><td id="version">2592f0ee9742</td></tr>
   </table>
   <p class="caption">Tabel 3. Spesifikasi model dan aplikasi.</p>
 

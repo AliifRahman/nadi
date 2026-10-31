@@ -6,13 +6,13 @@ memakai API pihak lain.
 
 | | |
 |---|---|
-| Versi | `18e4ded962cb` (12 karakter pertama SHA-256 file checkpoint) |
+| Versi | `2592f0ee9742` (12 karakter pertama SHA-256 file checkpoint) |
 | Pembuat | Alif Rahman |
 | Jenis | GPT-style transformer, decoder-only |
-| Ukuran | 4,0 juta parameter: 4 layer, 4 head, dimensi 256 |
-| Vocabulary | 2.932 token |
+| Ukuran | 4,1 juta parameter: 4 layer, 4 head, dimensi 256 |
+| Vocabulary | 3.422 token |
 | Context | 20 klaim terakhir satu peserta, 12 token per klaim |
-| Training | 5.000 step, 23 menit di MacBook M3 8 GB |
+| Training | 10.000 step, 52 menit di MacBook M3 8 GB |
 
 ## Untuk apa
 
@@ -29,9 +29,11 @@ sebelumnya, faskes). Value dengan probabilitas rendah naik ke atas queue.
 
 ## Data training
 
-Data Sampel BPJS Kesehatan Edisi 2025 (reguler): 1.699.219 klaim FKRTL dari 306.710 peserta.
-Split per peserta: 90% untuk training, 10% jadi held-out test set. ID peserta dan faskes
-di-shuffle ulang waktu data cleaning. Tidak ada NIK atau nama.
+Set Reguler Data Sampel BPJS Kesehatan Edisi 2021 sampai 2025, disambung per peserta: 6.998.359
+klaim FKRTL dari 756.440 peserta, pulang 2019 sampai 2024. Training hanya memakai klaim yang
+pulang sampai 2023 dari 90% peserta (4.757.638 klaim). Klaim 2024 dan 10% peserta sisanya tidak
+pernah dilihat model. ID peserta dan faskes di-shuffle ulang waktu data cleaning. Tidak ada NIK
+atau nama.
 
 Training-nya self-supervised: model belajar prediksi token berikutnya, jadi tidak butuh
 label fraud. Data sampel memang tidak punya label itu.
@@ -47,17 +49,21 @@ sebagai probabilitas level I, II, III.
 
 ## Hasil evaluasi
 
-Test set: 171.510 klaim (19.541 rawat inap) dari peserta yang tidak ikut training. Karena
-tidak ada label fraud, klaim test dimodifikasi dengan pattern yang diketahui, lalu dihitung
-recall di top 5% score.
+Test set: 195.544 klaim rawat inap 2024, tahun yang tidak pernah dilihat model. Karena tidak
+ada label fraud, klaim 2024 milik peserta yang tidak ikut training dimodifikasi dengan pattern
+yang diketahui, lalu dihitung recall di top 5% score.
 
 | Test | NADI | Baseline |
 |---|---|---|
-| Accuracy prediksi severity rawat inap | 96,2% | 84,1% |
-| Severity dinaikkan I ke II | recall 96% | 70% |
-| Upcoding realistis: +1 dx sekunder, severity I ke II | recall 49% | 25% |
+| Accuracy prediksi severity rawat inap | 96,4% | 83,0% |
+| Severity dinaikkan I ke II | recall 97% | 71% |
+| Upcoding realistis: +1 dx sekunder, severity I ke II | recall 50% | 18% |
 | Episode rawat inap dipecah jadi dua klaim | recall 98% | rule: 100% |
-| LOS diperpanjang 3-5 hari | recall 46% | 44% |
+| LOS diperpanjang 3-5 hari | recall 47% | 44% |
+
+Untuk menemukan separuh upcoding realistis, cukup memeriksa 5,2% sampai 6,2% klaim rawat inap
+menurut urutan NADI, sedangkan urutan acak perlu 50%. Pada seluruh urutan, tabel frekuensi
+sedikit lebih baik (AUC 0,888 berbanding 0,832), jadi keunggulan NADI ada di puncak queue.
 
 ## Limitasi
 

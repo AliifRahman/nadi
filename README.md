@@ -12,7 +12,7 @@ A one-minute overview video (in English, with Indonesian subtitles): https://ali
 
 This repository is an entry to the BPJS Kesehatan Healthkathon 2026, in the Health Facility
 Risk Efficiency category (*Efisiensi Risiko Fasilitas Kesehatan*). It addresses upcoding,
-episode splitting, and repeat billing.
+episode splitting, repeat billing, and readmission.
 
 ## Overview
 
@@ -48,9 +48,10 @@ no pretrained model and no third-party API. Further details are provided in
    from the member's claim history. Training is self-supervised, so no fraud labels are
    required.
 3. The probability that the model assigns to the claimed value serves as the score. For
-   example, a claim at severity level III with a probability of 3.8% is prioritised for review.
-4. Patterns that are already well defined, namely episode splitting and repeat billing, are
-   handled by rules.
+   example, a claim billed at severity level III, which the model rates at 27% against 64% for
+   severity level I, is prioritised for review.
+4. Patterns that are already well defined, namely episode splitting, 30-day readmission,
+   overlapping stays and repeat billing, are handled by rules.
 5. At facility level, each facility's share of claims at severity level II or III is compared
    with that of its peers (same CBG and same hospital class) and displayed as a funnel plot.
    This comparison uses a frequency table rather than the model (see Limitations).
@@ -62,65 +63,48 @@ The score sets the priority of review. It is not a decision.
 
 ## Evaluation
 
-The data are the BPJS Kesehatan Sample Data, 2025 Edition (regular set): 1,699,219 hospital
-claims from 306,710 members. The split is by member, and 10% of members form the test set
-(171,510 claims, of which 19,541 are inpatient).
+The data are the regular sets of the BPJS Kesehatan Sample Data, editions 2021 to 2025. Members
+found in two editions have the same date of birth and sex in every case checked, so the editions
+form one longitudinal cohort: 6,998,359 hospital claims from 756,440 members, discharged between
+2019 and 2024.
 
-The sample data contain no fraud labels. The evaluation therefore uses injected anomalies:
-claims in the test set are modified according to a known pattern, and recall is measured
-among the 5% of claims with the highest scores.
+The model was trained only on claims discharged up to 2023, and 10% of members were left out of
+training altogether (4,757,638 training claims, 10,000 steps, 52 minutes on a MacBook M3 with
+8 GB). It was then tested on the 195,544 inpatient claims of 2024, a year it never saw
+(`validate.py`).
 
-| Test | NADI | Baseline (table of CBG by number of secondary diagnoses) |
-|---|---|---|
-| Accuracy of inpatient severity prediction | 96.2% | 84.1% |
-| Severity raised from I to II, other fields unchanged | recall 96% | 70% |
-| Realistic upcoding: one secondary diagnosis added, severity I to II | recall 49% | 25% |
-| One inpatient episode split into two claims | recall 98% | rule: recall 100%, 7 false positives |
-| LOS extended by 3 to 5 days | recall 46% | 44% (table of CBG by severity) |
-
-Facility level, full sample: 1,906 facilities have at least 30 inpatient claims, and 33 of
-them lie above the 3σ limit. The index is stable: the Spearman correlation between the first
-and second half of the year is 0.67, across the 1,120 facilities with sufficient claims in
-both halves. The index therefore reflects a persistent characteristic of the facility
-rather than noise.
-
-In the unmodified test set, 373 inpatient claims have a severity level above the model's
-prediction. The difference from the median tariff is approximately Rp1.25 billion, or 1.07%
-of inpatient cost. With sampling weights applied, this corresponds to approximately
-Rp1.0 trillion per year. This figure is a rough estimate.
-
-Rules, full sample: episode splitting applies to 89 claims (5,892 claims when weighted,
-approximately Rp36.5 billion per year), and repeat billing applies to 26 claims.
-
-The web application displays the full sample, not only the test set. In-sample and held-out
-scores are nearly identical (severity accuracy of 96.5% and 96.2% respectively). All figures
-in the table above are from the test set.
-
-### Validation on a later year, 2019–2024
-
-The sample editions share member identifiers: members found in two editions have the same
-date of birth and sex in every case, so the regular sets of the 2021 to 2025 editions form one
-longitudinal cohort. Together they hold 6,998,359 hospital claims from 756,440 members,
-discharged between 2019 and 2024. A second model was trained only on claims discharged up to
-2023 (4,757,638 claims, 10,000 steps, 52 minutes on the same laptop) and tested on the
-195,544 inpatient claims of 2024, a year it never saw (`validate.py`).
+The sample data contain no fraud labels, and the organisers confirmed that no claim status data
+are available. The evaluation therefore uses injected anomalies: claims are modified according
+to a known pattern, and recall is measured among the 5% of claims with the highest scores.
 
 | Test on 2024 claims | NADI | Baseline |
 |---|---|---|
-| Severity accuracy, every inpatient claim | 96.4% | 83.0% |
+| Severity accuracy, every inpatient claim | 96.4% | 83.0% (table of CBG by number of secondary diagnoses) |
+| Severity accuracy, members left out of training | 96.5% | 82.5% |
 | Severity accuracy, members with no claim before 2024 | 96.6% | 83.9% |
 | Severity raised from I to II, other fields unchanged | recall 97% | 71% |
 | Realistic upcoding: one secondary diagnosis added, severity I to II | recall 50% | 18% |
 | One inpatient episode split into two claims | recall 98% | rule: recall 100%, 11 false positives |
+| LOS extended by 3 to 5 days (`evaluate.py`) | recall 47% | 44% (table of CBG by severity) |
 
-Accuracy one year ahead matches the accuracy within the same year, so the model has learned
-coding patterns that hold across years rather than patterns of one edition. For realistic
-upcoding, NADI finds far more cases among the top 5% of claims, but over the whole ranking
-the table is slightly better (AUC 0.888 against 0.832).
+Accuracy one year ahead matches the 96.2% that an earlier model reached within a single year, so
+the model has learned coding patterns that hold across years. For realistic upcoding, NADI finds
+far more cases among the top 5% of claims, but over the whole ranking the table is slightly
+better (AUC 0.888 against 0.832).
 
-Rules applied to every claim of the six years:
+To find half of the realistic upcoding, a verifier following NADI's order checks 5.2% to 6.2% of
+inpatient claims, depending on the injection draw. The table needs 10.7%, and random order 50%.
 
-| Pattern (sub-category) | Claims, 2019–2024 | Weighted, per year | Top 5% of facilities hold |
+Of the 195,544 inpatient claims of 2024, 3,428 have a severity level above the model's
+prediction. The difference from the median tariff is approximately Rp11.6 billion in the sample.
+With sampling weights applied, this corresponds to approximately Rp1.0 trillion per year, or
+1.11% of inpatient cost. This figure is a rough estimate.
+
+### Patterns in the real claims, 2019 to 2024
+
+Rules applied to every claim of the six years produce review candidates:
+
+| Pattern (sub-category) | Claims, 2019-2024 | Weighted, per year | Top 5% of facilities hold |
 |---|---|---|---|
 | Episode split: back at the same hospital with the same diagnosis within a day (8) | 417 | about 5,800 claims, Rp42 billion | 69% |
 | Readmission within 2 to 30 days, same hospital and diagnosis, planned care excluded (16) | 12,388 | about 161,000 claims | 35% |
@@ -129,31 +113,44 @@ Rules applied to every claim of the six years:
 
 Planned care (chemotherapy and radiotherapy, dialysis, chronic kidney disease, thalassaemia,
 cancer) made up more than half of all 30-day readmissions and is excluded from that rule.
-Most remaining readmissions are likely to be medically justified, so the rule produces review
-candidates only. 92% of overlapping stays involve two different hospitals, and the median
-overlap is one day, which fits a referral recorded with a one-day offset. The 19% of
-overlapping stays that lie entirely within another stay are the strongest candidates.
+Most remaining readmissions are likely to be medically justified. 92% of overlapping stays
+involve two different hospitals, and the median overlap is one day, which fits a referral
+recorded with a one-day offset. The 19% of overlapping stays that lie entirely within another
+stay are the strongest candidates.
 
-Do the same facilities stand out every year? For the severity index (sub-category 4), the
-Spearman correlation between consecutive years is 0.66 to 0.71 across 1,081 to 1,679
-facilities. Of the facilities above the 3σ limit in one year, 24% to 59% are above it again
-the next year, against a base rate of 2%. Facilities with an episode split recur the next
-year in 4% to 31% of cases (base rate 2% to 3%), and facilities with an overlapping stay in
-14% to 19% (base rate 1% to 3%). A pattern that recurs at the same facility is a practice to
-review, not chance. Recurrence alone does not separate fraud from case mix or local coding
-habits.
+### Do the same facilities stand out every year?
 
-The difference between billed and verified amounts was examined as a possible label and
-rejected. Over the five editions, 3,313 inpatient claims (0.4%) were paid less than billed.
-The share is the same for severity I, II and III, and the amount paid matches the tariff of a
-lower severity in only 3% of cases. Most cuts apply to every claim of a facility, which
-points to tariff rules rather than reviewer corrections.
+Each facility's share of claims at severity level II or III is compared with its peers. For this
+index (sub-category 4), the Spearman correlation between consecutive years is 0.66 to 0.71 across
+1,081 to 1,679 facilities. Of the facilities above the 3σ limit in one year, 24% to 59% are above
+it again the next year, against a base rate of 2%. In 2024, 33 of 1,906 facilities lie above the
+limit.
+
+Facilities with an episode split recur the next year in 4% to 31% of cases (base rate 2% to 3%),
+and facilities with an overlapping stay in 14% to 19% (base rate 1% to 3%). A pattern that recurs
+at the same facility is a practice to review, not chance. Recurrence alone does not separate
+fraud from case mix or local coding habits.
+
+### Tested and not used
+
+- The difference between billed and verified amounts as a label. Over the five editions, 3,313
+  inpatient claims (0.4%) were paid less than billed. The share is the same for severity I, II
+  and III, the amount paid matches the tariff of a lower severity in about 3% of cases, and 76%
+  of the cuts fall in facilities where nearly every claim was cut that year, at round ratios such
+  as 0.7 and 0.9. This points to tariff rules rather than reviewer corrections.
+- Blending the NADI and table scores. AUC rises to 0.890, but recall in the top 5% falls from
+  48% to 42%.
+
+The web application displays the 1,699,219 claims of the 2025 edition, all from a year the model
+did not train on. It reads each member's history within that year only.
 
 ## Limitations
 
 - Upcoding that is internally consistent at the coding level is detected in only about half
   of cases. The clinical evidence is in the medical record, not in the claim data.
-- For prolonged LOS, NADI performs almost the same as the baseline (46% against 44%).
+- For prolonged LOS, NADI performs almost the same as the baseline (47% against 44%).
+- The readmission rule is weak: facility rates barely persist between years (Spearman 0.14 to
+  0.24 together with episode splits). Its hits are candidates only.
 - Rupiah figures are differences from the median tariff based on the model's prediction.
   They are not audit findings.
 - At facility level, NADI does not outperform a table. The expected severity derived from
@@ -165,7 +162,8 @@ points to tariff rules rather than reviewer corrections.
 - The sample data have no facility identifier column. The facility identifier is derived
   from the prefix of the visit identifier. This is an inference and is not documented
   officially.
-- The system has not been tested by verifiers, and no pilot has been conducted.
+- The application has no login or access control yet. It has not been tested by verifiers, and
+  no pilot has been conducted.
 
 ## Reviewer decisions and audit log
 
@@ -254,22 +252,19 @@ placeholders.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
+# regular sets of the 2021 to 2025 editions, then train on claims up to 2023
+.venv/bin/python prepare.py <edition>/data <edition>/data ... --out data/claims_all.parquet
+.venv/bin/python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000   # 52 minutes
+.venv/bin/python validate.py    # test on 2024; --rules-only skips the model
+# the application reads the 2025 edition
 .venv/bin/python prepare.py "/path/to/Data Sampel Reguler Edisi 2025/data"
-.venv/bin/python train.py       # about 25 minutes on a MacBook M3 with 8 GB
-.venv/bin/python evaluate.py    # about 5 minutes; prints the evaluation and writes artifacts/scored.parquet
+.venv/bin/python evaluate.py    # about 5 minutes; writes artifacts/scored.parquet
 .venv/bin/uvicorn app:app       # then open http://localhost:8000
 ```
 
 `python test_nadi.py` runs a quick check of the tokenizer, the rules, the facility index, and
 the FHIR bridge.
 
-Validation on a later year, with the regular sets of several editions (2021 to 2025):
-
-```bash
-.venv/bin/python prepare.py <edition>/data <edition>/data ... --out data/claims_all.parquet
-.venv/bin/python train.py --data data/claims_all.parquet --before 2024-01-01 --steps 10000 --out artifacts/nadi_2019_2023.pt
-.venv/bin/python validate.py    # --rules-only skips the model
-```
 
 ## Repository structure
 
